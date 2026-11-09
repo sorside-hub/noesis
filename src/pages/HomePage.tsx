@@ -17,19 +17,19 @@ import {
 export const HomePage: React.FC = () => {
   const {
     notes,
-    relics,
+    fragments,
     projects,
     setActiveView,
     setActiveNoteId,
     createNote,
-    setIsQuickCaptureOpen,
+    openFragmentDrawer,
   } = useNoesis();
 
   const recentNotes = [...notes]
     .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
     .slice(0, 4);
 
-  const starredRelics = relics.filter((r) => r.starred).slice(0, 3);
+  const starredFragments = fragments.filter((f) => f.starred).slice(0, 3);
   const totalWords = notes.reduce((acc, curr) => acc + (curr.wordCount || 0), 0);
 
   return (
@@ -45,17 +45,17 @@ export const HomePage: React.FC = () => {
               Welcome to Noesis
             </h1>
             <p className="text-sm text-[#6B635B] dark:text-[#A8A196] mt-1 max-w-xl font-normal leading-relaxed">
-              A quiet space designed for unhurried contemplation, long-form synthesis, and capturing the fleeting relics of everyday wonder.
+              A quiet space designed for unhurried contemplation, long-form synthesis, and capturing the fleeting fragments of everyday wonder.
             </p>
           </div>
 
           <div className="flex items-center gap-2.5 shrink-0">
             <button
-              onClick={() => setIsQuickCaptureOpen(true)}
+              onClick={() => openFragmentDrawer(null)}
               className="px-3.5 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:bg-[#F5EFEB] dark:hover:bg-[#272422] transition-colors shadow-2xs flex items-center gap-1.5"
             >
               <Feather size={14} className="text-[#9A3412] dark:text-[#EA580C]" />
-              <span>Capture Relic</span>
+              <span>Capture Fragment</span>
             </button>
             <button
               onClick={() => {
@@ -102,13 +102,13 @@ export const HomePage: React.FC = () => {
 
           <div className="p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28]">
             <span className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
-              Atomic Relics
+              Atomic Fragments
             </span>
             <p className="font-serif text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] mt-1 tabular-nums">
-              {relics.length}
+              {fragments.length}
             </p>
             <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196] mt-0.5 block">
-              Memories & quotes
+              Thoughts, references & ideas
             </span>
           </div>
 
@@ -209,49 +209,50 @@ export const HomePage: React.FC = () => {
             </div>
           </div>
 
-          {/* Starred Relics (1 Col - Numen Style) */}
+          {/* Starred Fragments (1 Col) */}
           <div className="space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="font-serif text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Starred Relics
+                Starred Fragments
               </h2>
               <button
-                onClick={() => setActiveView('capture')}
+                onClick={() => setActiveView('fragments')}
                 className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
               >
-                <span>All relics</span>
+                <span>All fragments</span>
                 <ArrowRight size={12} />
               </button>
             </div>
 
             <div className="space-y-3">
-              {starredRelics.map((relic) => (
+              {starredFragments.map((fragment) => (
                 <div
-                  key={relic.id}
-                  className="p-4 rounded-xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] flex flex-col justify-between"
+                  key={fragment.id}
+                  onClick={() => openFragmentDrawer(fragment.id)}
+                  className="p-4 rounded-xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] flex flex-col justify-between cursor-pointer transition-all shadow-2xs group"
                 >
                   <div>
                     <div className="flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62] mb-1">
-                      <span className="uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C]">
-                        {relic.type}
+                      <span className="uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] font-semibold text-[10px]">
+                        {fragment.type}
                       </span>
-                      <span>{relic.date}</span>
+                      <span>{fragment.date}</span>
                     </div>
 
-                    <h4 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                      {relic.title}
+                    <h4 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                      {fragment.title}
                     </h4>
 
                     <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-3 mt-1 leading-relaxed">
-                      {relic.content}
+                      {fragment.content}
                     </p>
                   </div>
 
                   <div className="flex items-center gap-1.5 mt-3 text-[10px] text-[#9C9388] font-mono">
-                    {relic.tags.map((t, idx) => (
+                    {fragment.tags.map((t, idx) => (
                       <span key={t}>
                         #{t}
-                        {idx < relic.tags.length - 1 ? ' · ' : ''}
+                        {idx < fragment.tags.length - 1 ? ' · ' : ''}
                       </span>
                     ))}
                   </div>
@@ -271,7 +272,7 @@ export const HomePage: React.FC = () => {
               onClick={() => setActiveView('library')}
               className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
             >
-              <span>Explore Knowledge Library</span>
+              <span>Explore Library</span>
               <ArrowRight size={12} />
             </button>
           </div>

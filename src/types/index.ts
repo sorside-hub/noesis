@@ -1,5 +1,6 @@
 export type ViewMode =
   | 'home'
+  | 'fragments'
   | 'capture'
   | 'library'
   | 'editor'
@@ -9,7 +10,8 @@ export type ViewMode =
 
 export type ThemePreference = 'light' | 'dark' | 'system';
 
-export type RelicType = 'object' | 'memory' | 'quote' | 'lesson' | 'idea';
+export type FragmentType = 'thought' | 'reference' | 'idea';
+export type RelicType = FragmentType;
 
 export type NoteType = 'reference' | 'thought' | 'idea';
 
@@ -38,9 +40,9 @@ export interface Notebook {
   description?: string;
 }
 
-export interface Relic {
+export interface Fragment {
   id: string;
-  type: RelicType;
+  type: FragmentType;
   title: string;
   content: string;
   tags: string[];
@@ -48,6 +50,8 @@ export interface Relic {
   source?: string;
   starred?: boolean;
 }
+
+export type Relic = Fragment;
 
 export interface Milestone {
   id: string;

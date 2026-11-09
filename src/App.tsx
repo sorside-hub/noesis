@@ -4,14 +4,14 @@ import { Sidebar } from './components/Sidebar';
 import { StreamColumn } from './components/StreamColumn';
 import { TiptapEditor } from './components/TiptapEditor';
 import { MobileNav } from './components/MobileNav';
-import { QuickCaptureModal } from './components/QuickCaptureModal';
+import { FragmentDrawer } from './components/FragmentDrawer';
 import { HomePage } from './pages/HomePage';
-import { CapturePage } from './pages/CapturePage';
+import { FragmentsPage } from './pages/FragmentsPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { SettingsPage } from './pages/SettingsPage';
-import { Menu, Feather, ChevronLeft } from 'lucide-react';
+import { Menu, Sun, Moon, Settings as SettingsIcon } from 'lucide-react';
 
 const WorkspaceShell: React.FC = () => {
   const {
@@ -19,7 +19,8 @@ const WorkspaceShell: React.FC = () => {
     setActiveView,
     isMobileDrawerOpen,
     setIsMobileDrawerOpen,
-    setIsQuickCaptureOpen,
+    theme,
+    setTheme,
   } = useNoesis();
 
   return (
@@ -62,13 +63,26 @@ const WorkspaceShell: React.FC = () => {
             </span>
           </div>
 
-          <div className="flex items-center gap-2">
+          <div className="flex items-center gap-1">
             <button
-              onClick={() => setIsQuickCaptureOpen(true)}
-              className="p-1.5 rounded-lg text-[#9A3412] dark:text-[#EA580C] hover:bg-[#ECE4DC] dark:hover:bg-[#272422]"
-              aria-label="Capture relic"
+              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
+              className="p-1.5 rounded-lg text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+              aria-label="Toggle theme"
+              title="Toggle Theme"
             >
-              <Feather size={18} />
+              {theme === 'dark' ? <Sun size={18} className="text-[#EA580C]" /> : <Moon size={18} className="text-[#9A3412]" />}
+            </button>
+            <button
+              onClick={() => setActiveView('settings')}
+              className={`p-1.5 rounded-lg transition-colors ${
+                activeView === 'settings'
+                  ? 'text-[#9A3412] dark:text-[#EA580C] bg-white dark:bg-[#272422]'
+                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#272422]'
+              }`}
+              aria-label="Settings"
+              title="Settings"
+            >
+              <SettingsIcon size={18} />
             </button>
           </div>
         </header>
@@ -87,8 +101,8 @@ const WorkspaceShell: React.FC = () => {
             </div>
           ) : activeView === 'home' ? (
             <HomePage />
-          ) : activeView === 'capture' ? (
-            <CapturePage />
+          ) : activeView === 'fragments' || activeView === 'capture' ? (
+            <FragmentsPage />
           ) : activeView === 'library' ? (
             <LibraryPage />
           ) : activeView === 'discover' ? (
@@ -105,8 +119,8 @@ const WorkspaceShell: React.FC = () => {
         {/* Mobile Bottom Navigation */}
         <MobileNav />
 
-        {/* Quick Capture Modal (Triggered from anywhere) */}
-        <QuickCaptureModal />
+        {/* Unified Fragment Drawer (Handles Create and View/Edit) */}
+        <FragmentDrawer />
       </div>
     </div>
   );

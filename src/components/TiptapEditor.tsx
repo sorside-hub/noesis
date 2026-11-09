@@ -236,7 +236,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           onClick={() => setActiveView('library')}
           className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline"
         >
-          Return to Knowledge Library
+          Return to Library
         </button>
       </div>
     );
@@ -271,7 +271,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
             <button
               onClick={() => setActiveView('library')}
               className="flex items-center gap-1 font-medium text-[#9A3412] dark:text-[#EA580C] hover:underline"
-              title="Return to Knowledge Library"
+              title="Return to Library"
             >
               <ChevronLeft size={16} />
               <span>Library</span>

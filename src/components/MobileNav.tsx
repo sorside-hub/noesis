@@ -1,25 +1,25 @@
 import React from 'react';
 import { useNoesis } from '../context/NoesisContext';
 import { ViewMode } from '../types';
-import { Compass, Feather, BookOpen, FolderKanban, Settings } from 'lucide-react';
+import { Compass, Feather, BookOpen, FolderKanban, Sparkles } from 'lucide-react';
 
 export const MobileNav: React.FC = () => {
-  const { activeView, setActiveView, setIsQuickCaptureOpen } = useNoesis();
+  const { activeView, setActiveView, openFragmentDrawer } = useNoesis();
 
   const navItems: { view: ViewMode; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
     { view: 'home', label: 'Home', icon: Compass },
     { view: 'library', label: 'Library', icon: BookOpen },
-    { view: 'capture', label: 'Capture', icon: Feather },
+    { view: 'fragments', label: 'Fragments', icon: Feather },
+    { view: 'discover', label: 'Discover', icon: Sparkles },
     { view: 'projects', label: 'Projects', icon: FolderKanban },
-    { view: 'settings', label: 'Settings', icon: Settings },
   ];
 
   return (
     <>
       {/* Floating Action Button for Quick Capture (Numen Style Quill Button) */}
       <button
-        onClick={() => setIsQuickCaptureOpen(true)}
-        aria-label="Capture new relic"
+        onClick={() => openFragmentDrawer(null)}
+        aria-label="Capture new fragment"
         className="md:hidden fixed bottom-20 right-5 z-40 w-13 h-13 rounded-full bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
       >
         <Feather size={22} />
@@ -30,7 +30,10 @@ export const MobileNav: React.FC = () => {
         {navItems.map((item) => {
           const Icon = item.icon;
           // When viewing or editing a note, highlight Library as the active section
-          const isActive = activeView === item.view || (item.view === 'library' && activeView === 'editor');
+          const isActive =
+            activeView === item.view ||
+            (item.view === 'fragments' && activeView === 'capture') ||
+            (item.view === 'library' && activeView === 'editor');
           return (
             <button
               key={item.view}

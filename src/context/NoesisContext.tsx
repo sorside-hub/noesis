@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
-import { ViewMode, ThemePreference, Note, Notebook, Relic, Project, RelicType, NoteType } from '../types';
-import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
+import { ViewMode, ThemePreference, Note, Notebook, Relic, Fragment, Project, RelicType, FragmentType, NoteType } from '../types';
+import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
 
 interface NoesisContextType {
   // Theme
@@ -40,8 +40,18 @@ interface NoesisContextType {
   notebooks: Notebook[];
   createNotebook: (name: string, description?: string) => void;
 
-  // Relics (Quick Captures)
-  relics: Relic[];
+  // Fragments (Micro-notes & Captures)
+  fragments: Fragment[];
+  relics: Fragment[]; // alias for backward-compatibility
+  activeFragmentId: string | null;
+  setActiveFragmentId: (id: string | null) => void;
+  isFragmentDrawerOpen: boolean;
+  openFragmentDrawer: (fragmentId?: string | null) => void;
+  closeFragmentDrawer: () => void;
+  createFragment: (data: { type: FragmentType; title: string; content: string; tags: string[]; source?: string }) => string;
+  updateFragment: (id: string, updates: Partial<Fragment>) => void;
+  deleteFragment: (id: string) => void;
+  toggleStarFragment: (id: string) => void;
   createRelic: (data: { type: RelicType; title: string; content: string; tags: string[]; source?: string }) => void;
   deleteRelic: (id: string) => void;
   toggleStarRelic: (id: string) => void;
@@ -96,6 +106,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
   const [isMobileDrawerOpen, setIsMobileDrawerOpen] = useState<boolean>(false);
   const [isQuickCaptureOpen, setIsQuickCaptureOpen] = useState<boolean>(false);
+  const [activeFragmentId, setActiveFragmentId] = useState<string | null>(null);
+  const [isFragmentDrawerOpen, setIsFragmentDrawerOpen] = useState<boolean>(false);
 
   // Entities state with localStorage caching and migration
   const [notes, setNotes] = useState<Note[]>(() => {
@@ -128,17 +140,31 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return INITIAL_NOTEBOOKS;
   });
 
-  const [relics, setRelics] = useState<Relic[]>(() => {
-    const saved = localStorage.getItem('noesis_relics');
+  const [fragments, setFragments] = useState<Fragment[]>(() => {
+    const saved = localStorage.getItem('noesis_fragments') || localStorage.getItem('noesis_relics');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        return parsed.map((f: any) => {
+          let type: FragmentType = 'thought';
+          if (f.type === 'thought' || f.type === 'reference' || f.type === 'idea') {
+            type = f.type;
+          } else if (f.type === 'quote' || f.type === 'object') {
+            type = 'reference';
+          }
+          return {
+            ...f,
+            type,
+          };
+        });
       } catch {
-        return INITIAL_RELICS;
+        return INITIAL_FRAGMENTS;
       }
     }
-    return INITIAL_RELICS;
+    return INITIAL_FRAGMENTS;
   });
+
+  const relics = fragments; // alias
 
   const [projects, setProjects] = useState<Project[]>(() => {
     const saved = localStorage.getItem('noesis_projects');
@@ -162,8 +188,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }, [notebooks]);
 
   useEffect(() => {
-    localStorage.setItem('noesis_relics', JSON.stringify(relics));
-  }, [relics]);
+    localStorage.setItem('noesis_fragments', JSON.stringify(fragments));
+    localStorage.setItem('noesis_relics', JSON.stringify(fragments));
+  }, [fragments]);
 
   useEffect(() => {
     localStorage.setItem('noesis_projects', JSON.stringify(projects));
@@ -277,28 +304,71 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setNotebooks((prev) => [...prev, newNb]);
   };
 
-  const createRelic = (data: { type: RelicType; title: string; content: string; tags: string[]; source?: string }) => {
-    const newRelic: Relic = {
-      id: `relic-${Date.now()}`,
+  const openFragmentDrawer = (fragmentId?: string | null) => {
+    setActiveFragmentId(fragmentId ?? null);
+    setIsFragmentDrawerOpen(true);
+    setIsQuickCaptureOpen(true);
+  };
+
+  const closeFragmentDrawer = () => {
+    setIsFragmentDrawerOpen(false);
+    setActiveFragmentId(null);
+    setIsQuickCaptureOpen(false);
+  };
+
+  const formatDateDDMMYYYY = (d: Date = new Date()) => {
+    const day = String(d.getDate()).padStart(2, '0');
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    const year = d.getFullYear();
+    return `${day}/${month}/${year}`;
+  };
+
+  const createFragment = (data: { type: FragmentType; title: string; content: string; tags: string[]; source?: string }): string => {
+    const id = `fragment-${Date.now()}`;
+    const newFragment: Fragment = {
+      id,
       type: data.type,
-      title: data.title,
+      title: data.title || 'Untitled Fragment',
       content: data.content,
       tags: data.tags,
       source: data.source,
-      date: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
+      date: formatDateDDMMYYYY(),
       starred: false,
     };
-    setRelics((prev) => [newRelic, ...prev]);
+    setFragments((prev) => [newFragment, ...prev]);
+    return id;
+  };
+
+  const updateFragment = (id: string, updates: Partial<Fragment>) => {
+    setFragments((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, ...updates } : f))
+    );
+  };
+
+  const deleteFragment = (id: string) => {
+    setFragments((prev) => prev.filter((f) => f.id !== id));
+    if (activeFragmentId === id) {
+      closeFragmentDrawer();
+    }
+  };
+
+  const toggleStarFragment = (id: string) => {
+    setFragments((prev) =>
+      prev.map((f) => (f.id === id ? { ...f, starred: !f.starred } : f))
+    );
+  };
+
+  // Backwards compatibility wrappers
+  const createRelic = (data: { type: RelicType; title: string; content: string; tags: string[]; source?: string }) => {
+    createFragment(data);
   };
 
   const deleteRelic = (id: string) => {
-    setRelics((prev) => prev.filter((r) => r.id !== id));
+    deleteFragment(id);
   };
 
   const toggleStarRelic = (id: string) => {
-    setRelics((prev) =>
-      prev.map((r) => (r.id === id ? { ...r, starred: !r.starred } : r))
-    );
+    toggleStarFragment(id);
   };
 
   const toggleProjectMilestone = (projectId: string, milestoneId: string) => {
@@ -341,6 +411,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setIsMobileDrawerOpen,
         isQuickCaptureOpen,
         setIsQuickCaptureOpen,
+        activeFragmentId,
+        setActiveFragmentId,
+        isFragmentDrawerOpen,
+        openFragmentDrawer,
+        closeFragmentDrawer,
         notes,
         activeNote,
         createNote,
@@ -352,7 +427,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         unlinkRelatedNote,
         notebooks,
         createNotebook,
-        relics,
+        fragments,
+        relics: fragments,
+        createFragment,
+        updateFragment,
+        deleteFragment,
+        toggleStarFragment,
         createRelic,
         deleteRelic,
         toggleStarRelic,

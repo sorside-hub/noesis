@@ -1,9 +1,6 @@
 import React, { useState } from 'react';
 import { useNoesis } from '../context/NoesisContext';
 import {
-  Sun,
-  Moon,
-  Monitor,
   Download,
   RotateCcw,
   Check,
@@ -15,7 +12,7 @@ import {
 import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
 
 export const SettingsPage: React.FC = () => {
-  const { theme, setTheme, notes, relics } = useNoesis();
+  const { notes, relics } = useNoesis();
   const [copiedExport, setCopiedExport] = useState(false);
   const [resetNotice, setResetNotice] = useState(false);
   const [fontSize, setFontSize] = useState<'standard' | 'generous' | 'large'>('standard');
@@ -65,76 +62,8 @@ export const SettingsPage: React.FC = () => {
             Settings & Aesthetics
           </h1>
           <p className="text-sm text-[#6B635B] dark:text-[#A8A196] mt-1">
-            Customize typography, color atmosphere, and manage your local offline archive.
+            Customize typography and manage your local offline archive. Theme preference is controlled via the header/sidebar toggle.
           </p>
-        </div>
-
-        {/* Theme Preference Selection */}
-        <div className="p-6 sm:p-7 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-4">
-          <div>
-            <h2 className="font-serif text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-              Visual Atmosphere & Theme
-            </h2>
-            <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-1">
-              Select between warm editorial alabaster parchment, antique charcoal, or system preference.
-            </p>
-          </div>
-
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
-            <button
-              onClick={() => setTheme('light')}
-              className={`p-4 rounded-xl border text-left transition-all ${
-                theme === 'light'
-                  ? 'border-[#9A3412] bg-[#FAF7F2] ring-2 ring-[#9A3412]/20'
-                  : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#272422] hover:border-[#D6CEBE]'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <Sun size={20} className="text-[#9A3412]" />
-                {theme === 'light' && <Check size={16} className="text-[#9A3412]" />}
-              </div>
-              <h3 className="font-serif text-base font-medium text-[#221F1D]">Warm Parchment</h3>
-              <p className="text-xs text-[#6B635B] mt-1">
-                Alabaster canvas with warm sepia ink and terracotta accents.
-              </p>
-            </button>
-
-            <button
-              onClick={() => setTheme('dark')}
-              className={`p-4 rounded-xl border text-left transition-all ${
-                theme === 'dark'
-                  ? 'border-[#EA580C] bg-[#1A1817] ring-2 ring-[#EA580C]/20'
-                  : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#272422] hover:border-[#D6CEBE]'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <Moon size={20} className="text-[#EA580C]" />
-                {theme === 'dark' && <Check size={16} className="text-[#EA580C]" />}
-              </div>
-              <h3 className="font-serif text-base font-medium text-[#EDE8E1]">Antique Charcoal</h3>
-              <p className="text-xs text-[#A8A196] mt-1">
-                Deep matte stone with warm muted amber typography.
-              </p>
-            </button>
-
-            <button
-              onClick={() => setTheme('system')}
-              className={`p-4 rounded-xl border text-left transition-all ${
-                theme === 'system'
-                  ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#FAF7F2] dark:bg-[#1A1817] ring-2 ring-[#9A3412]/20'
-                  : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#272422] hover:border-[#D6CEBE]'
-              }`}
-            >
-              <div className="flex items-center justify-between mb-3">
-                <Monitor size={20} className="text-[#9A3412] dark:text-[#EA580C]" />
-                {theme === 'system' && <Check size={16} className="text-[#9A3412] dark:text-[#EA580C]" />}
-              </div>
-              <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1]">System Default</h3>
-              <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-1">
-                Synchronize dynamically with operating system dark mode.
-              </p>
-            </button>
-          </div>
         </div>
 
         {/* Typography & Reading Rhythm */}

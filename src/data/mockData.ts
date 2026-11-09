@@ -1,4 +1,4 @@
-import { Note, Notebook, Relic, Project } from '../types';
+import { Note, Notebook, Relic, Fragment, Project } from '../types';
 
 export const INITIAL_NOTEBOOKS: Notebook[] = [
   { id: 'personal', name: 'Personal Reflections', count: 8, description: 'Private journal entries and philosophical musings' },
@@ -151,65 +151,68 @@ export const INITIAL_NOTES: Note[] = [
   },
 ];
 
-export const INITIAL_RELICS: Relic[] = [
+export const INITIAL_FRAGMENTS: Fragment[] = [
   {
-    id: 'relic-1',
-    type: 'object',
+    id: 'fragment-1',
+    type: 'thought',
     title: "Dad's old pocket watch...",
     content: 'Found this in the attic yesterday. It belonged to grandfather, then my father. The inscription reads "Time is the most valuable thing we can spend". It stopped working years ago but I asked mom if I can fit it up and keep it. It reminds me how fleeting life is and how precious each moment is.',
     tags: ['family', 'legacy', 'time'],
-    date: 'Jan 15, 2026',
+    date: '15/01/2026',
     source: 'Attic heirloom chest',
     starred: true,
   },
   {
-    id: 'relic-2',
-    type: 'memory',
+    id: 'fragment-2',
+    type: 'thought',
     title: 'First Snow of Winter',
     content: 'Woke up to the world transformed. Everything was still and quiet, like nature pressed reset. I stood at the kitchen window with my cup of coffee watching the specs of snow dance around streetlamp. There is something magic about the first snow. It feels like the air is full of wonder and new beginnings.',
     tags: ['seasons', 'nature', 'wonder'],
-    date: 'Dec 2, 2025',
+    date: '02/12/2025',
     starred: true,
   },
   {
-    id: 'relic-3',
-    type: 'quote',
+    id: 'fragment-3',
+    type: 'reference',
     title: 'Conversation at the Cafe',
     content: 'I was sketching in my usual corner at "The Daily Grind" when an elderly woman asked what I was drawing. We ended up talking for an hour about watercolor pigments, the changing city, and how art keeps the spirit young.',
     tags: ['connection', 'art', 'wisdom'],
-    date: 'Nov 14, 2025',
+    date: '14/11/2025',
     source: 'The Daily Grind cafe',
     starred: false,
   },
   {
-    id: 'relic-4',
-    type: 'lesson',
+    id: 'fragment-4',
+    type: 'thought',
     title: 'The silent hum of accomplishment',
     content: 'After weeks of late nights and countless revisions, the essay is finally sent. This is not loud, celebratory feeling; it is quiet, deep peace. The satisfaction comes not from external validation, but knowing you gave everything you had to craftsmanship.',
     tags: ['creativity', 'work', 'deep-work'],
-    date: 'Oct 28, 2025',
+    date: '28/10/2025',
     starred: true,
   },
   {
-    id: 'relic-5',
+    id: 'fragment-5',
     type: 'idea',
     title: 'Marginalia as conversational partner',
     content: 'Instead of passive highlighting, treat reading as an argumentative dialogue. Write questions directly in the margins as though the author were sitting across the library table from you.',
     tags: ['reading', 'inquiry', 'method'],
-    date: 'Sep 19, 2025',
+    date: '19/09/2025',
+    source: 'Adler research notes',
     starred: false,
   },
   {
-    id: 'relic-6',
-    type: 'object',
+    id: 'fragment-6',
+    type: 'reference',
     title: 'Brass compass from Kyoto antiquary',
     content: 'Small, weathered brass casing with a gently trembling needle. Reminds me that while our paths shift with the terrain, orientation is an internal compass.',
     tags: ['travel', 'direction', 'artifacts'],
-    date: 'Aug 04, 2025',
+    date: '04/08/2025',
     source: 'Kyoto Teramachi antiquary',
     starred: false,
   },
 ];
+
+export const INITIAL_RELICS = INITIAL_FRAGMENTS;
 
 export const INITIAL_PROJECTS: Project[] = [
   {

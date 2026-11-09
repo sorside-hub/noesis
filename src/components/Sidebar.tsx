@@ -31,7 +31,7 @@ export const Sidebar: React.FC = () => {
     setTheme,
     isSidebarCollapsed,
     toggleSidebar,
-    setIsQuickCaptureOpen,
+    openFragmentDrawer,
   } = useNoesis();
 
   const totalNotes = notes.length;
@@ -40,10 +40,10 @@ export const Sidebar: React.FC = () => {
 
   const navItems: { view: ViewMode; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
     { view: 'home', label: 'Overview', icon: Compass },
-    { view: 'library', label: 'Knowledge Library', icon: BookOpen },
-    { view: 'capture', label: 'Capture & Relics', icon: Feather },
-    { view: 'discover', label: 'Discover & Connect', icon: Sparkles },
-    { view: 'projects', label: 'Projects & Essays', icon: FolderKanban },
+    { view: 'library', label: 'Library', icon: BookOpen },
+    { view: 'fragments', label: 'Fragments', icon: Feather },
+    { view: 'discover', label: 'Discover', icon: Sparkles },
+    { view: 'projects', label: 'Projects', icon: FolderKanban },
     { view: 'settings', label: 'Settings', icon: Settings },
   ];
 
@@ -70,7 +70,10 @@ export const Sidebar: React.FC = () => {
           <nav className="flex flex-col items-center gap-1.5 mt-2 w-full px-2">
             {navItems.map((item) => {
               const Icon = item.icon;
-              const isActive = activeView === item.view || (item.view === 'library' && activeView === 'editor');
+              const isActive =
+                activeView === item.view ||
+                (item.view === 'fragments' && activeView === 'capture') ||
+                (item.view === 'library' && activeView === 'editor');
               return (
                 <button
                   key={item.view}
@@ -138,8 +141,8 @@ export const Sidebar: React.FC = () => {
             <span>New Note</span>
           </button>
           <button
-            onClick={() => setIsQuickCaptureOpen(true)}
-            title="Quick Capture Relic"
+            onClick={() => openFragmentDrawer(null)}
+            title="Quick Capture Fragment"
             className="p-2 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-white dark:bg-[#221F1E] text-[#9A3412] dark:text-[#EA580C] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] transition-colors shadow-xs"
           >
             <Feather size={15} />
@@ -153,7 +156,10 @@ export const Sidebar: React.FC = () => {
           </p>
           {navItems.map((item) => {
             const Icon = item.icon;
-            const isActive = activeView === item.view || (item.view === 'library' && activeView === 'editor');
+            const isActive =
+              activeView === item.view ||
+              (item.view === 'fragments' && activeView === 'capture') ||
+              (item.view === 'library' && activeView === 'editor');
             return (
               <button
                 key={item.view}
