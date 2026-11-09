@@ -596,7 +596,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               type="text"
               value={title}
               onChange={handleTitleChange}
-              placeholder="Title of this contemplation..."
+              placeholder="Untitled Note"
               className="w-full font-serif text-3xl sm:text-4xl lg:text-5xl font-medium tracking-tight bg-transparent text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none placeholder:text-[#9C9388]/60 dark:placeholder:text-[#736C62]/60 border-none p-0"
             />
           </div>

@@ -295,7 +295,6 @@ export const FragmentDrawer: React.FC = () => {
               type="text"
               value={title}
               onChange={(e) => handleTitleChange(e.target.value)}
-              autoFocus={isCreateMode}
               className="w-full font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] bg-transparent border-b border-transparent hover:border-[#E8E2D8] dark:hover:border-[#2F2B28] focus:border-[#9A3412] dark:focus:border-[#EA580C] focus:outline-none py-1 transition-colors"
               placeholder={isCreateMode ? 'Title or first line...' : 'Untitled Fragment...'}
             />

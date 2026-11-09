@@ -119,7 +119,7 @@ export const FragmentsPage: React.FC = () => {
             onClick={() => openFragmentDrawer(null)}
             className="px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-2 shrink-0"
           >
-            <Plus size={15} />
+            <Feather size={15} />
             <span>Capture</span>
           </button>
         </div>
@@ -428,7 +428,7 @@ export const FragmentsPage: React.FC = () => {
               onClick={() => openFragmentDrawer(null)}
               className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1"
             >
-              <Plus size={13} /> Capture a new fragment
+              <Feather size={13} /> Capture a new fragment
             </button>
           </div>
         ) : viewMode === 'grid' ? (

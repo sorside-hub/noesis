@@ -5,6 +5,7 @@ import {
   BookOpen,
   Search,
   Plus,
+  Feather,
   Star,
   Clock,
   Archive,
@@ -173,7 +174,7 @@ export const LibraryPage: React.FC = () => {
             onClick={handleCreateNew}
             className="px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-2 shrink-0"
           >
-            <Plus size={15} />
+            <Feather size={15} />
             <span>New Note</span>
           </button>
         </div>
@@ -511,7 +512,7 @@ export const LibraryPage: React.FC = () => {
               onClick={handleCreateNew}
               className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1"
             >
-              <Plus size={13} /> Compose a new note
+              <Feather size={13} /> Compose a new note
             </button>
           </div>
         ) : viewLayout === 'grid' ? (

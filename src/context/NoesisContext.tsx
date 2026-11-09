@@ -207,7 +207,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const targetNotebook = notebookId || activeNotebookId || 'personal';
     const newNote: Note = {
       id: `note-${Date.now()}`,
-      title: 'Untitled Note',
+      title: '',
       content: '<p></p>',
       excerpt: 'Begin writing your reflections...',
       type: type || 'thought',

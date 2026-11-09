@@ -65,7 +65,7 @@ export const HomePage: React.FC = () => {
               }}
               className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-1.5"
             >
-              <Plus size={14} />
+              <Feather size={14} />
               <span>New Essay</span>
             </button>
           </div>

@@ -64,9 +64,9 @@ export const Sidebar: React.FC = () => {
             title="Create Note"
             className="w-10 h-10 rounded-xl bg-[#9A3412] text-white hover:bg-[#78280E] flex items-center justify-center shadow-xs transition-colors"
           >
-            <Plus size={18} />
+            <Feather size={18} />
           </button>
-
+ 
           <nav className="flex flex-col items-center gap-1.5 mt-2 w-full px-2">
             {navItems.map((item) => {
               const Icon = item.icon;
@@ -137,7 +137,7 @@ export const Sidebar: React.FC = () => {
             onClick={() => createNote()}
             className="flex-1 flex items-center justify-center gap-1.5 py-2 px-3 rounded-lg bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] shadow-xs transition-colors"
           >
-            <Plus size={14} />
+            <Feather size={14} />
             <span>New Note</span>
           </button>
           <button
