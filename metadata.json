@@ -1,0 +1,7 @@
+{
+  "name": "Noesis",
+  "description": "A minimalist editorial personal intellectual workspace and reflective note system.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

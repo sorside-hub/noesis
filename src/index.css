@@ -1,0 +1,101 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    --font-serif: "Fraunces", Georgia, serif;
+    --font-sans: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+    --font-mono: "JetBrains Mono", monospace;
+
+    /* Editorial Parchment Light Tokens */
+    --canvas-bg: #FAF7F2;
+    --surface-bg: #FFFFFF;
+    --surface-subtle: #F5EFEB;
+    --surface-hover: #ECE4DC;
+    --border-subtle: #E8E2D8;
+    --border-strong: #D6CEBE;
+    
+    --text-primary: #221F1D;
+    --text-secondary: #6B635B;
+    --text-tertiary: #9C9388;
+    
+    --accent-terracotta: #9A3412;
+    --accent-terracotta-soft: #FED7AA;
+    --accent-amber: #B45309;
+    --accent-sage: #4D6B53;
+  }
+
+  .dark {
+    /* Antique Charcoal Dark Tokens */
+    --canvas-bg: #151413;
+    --surface-bg: #1E1C1A;
+    --surface-subtle: #272422;
+    --surface-hover: #332F2C;
+    --border-subtle: #2F2B28;
+    --border-strong: #443E3A;
+    
+    --text-primary: #EDE8E1;
+    --text-secondary: #A8A196;
+    --text-tertiary: #736C62;
+    
+    --accent-terracotta: #EA580C;
+    --accent-terracotta-soft: #431407;
+    --accent-amber: #F59E0B;
+    --accent-sage: #86A789;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    background-color: var(--canvas-bg);
+    color: var(--text-primary);
+  }
+
+  h1, h2, h3, .font-editorial {
+    font-family: var(--font-serif);
+  }
+}
+
+/* Custom Scrollbars for Editorial Panels */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: rgba(150, 140, 130, 0.25);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(150, 140, 130, 0.45);
+}
+
+/* Tiptap Editor Styling */
+.tiptap {
+  outline: none;
+}
+.tiptap p.is-editor-empty:first-child::before {
+  color: #9C9388;
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+}
+.dark .tiptap p.is-editor-empty:first-child::before {
+  color: #736C62;
+}
+
+.tiptap blockquote {
+  border-left: 2px solid var(--border-strong);
+  padding-left: 1.25rem;
+  margin: 1.25rem 0;
+  font-style: italic;
+  color: var(--text-secondary);
+}
+
+.tiptap hr {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 2rem 0;
+}
