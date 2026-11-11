@@ -48,6 +48,8 @@ export const cleanTextForEmbedding = (rawText: string): string => {
 
 /**
  * Generates 1024-dimension dense vector embedding using Cloudflare Workers AI 'bge-m3'
+ * Strategy 1: Uses /api/embed Pages Function with Cloudflare env.AI binding (Deployed on Cloudflare)
+ * Strategy 2: Direct REST API using Account ID & API Token (Preview/Local)
  */
 export const generateBgeM3Embedding = async (
   text: string
@@ -55,9 +57,28 @@ export const generateBgeM3Embedding = async (
   const cleaned = cleanTextForEmbedding(text);
   if (!cleaned) return null;
 
+  // Strategy 1: Try Cloudflare Pages Function at /api/embed (uses env.AI binding)
+  try {
+    const proxyRes = await fetch('/api/embed', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text: cleaned }),
+    });
+
+    if (proxyRes.ok) {
+      const json = await proxyRes.json();
+      if (json.success && Array.isArray(json.vector) && json.vector.length === 1024) {
+        return json.vector;
+      }
+    }
+  } catch {
+    // /api/embed not available or running in standalone client preview
+  }
+
+  // Strategy 2: Fallback to Cloudflare REST API with credentials
   if (!isCloudflareAiConfigured()) {
     console.info(
-      'Cloudflare Workers AI (bge-m3) credentials not yet configured. Set VITE_CLOUDFLARE_ACCOUNT_ID and VITE_CLOUDFLARE_API_TOKEN.'
+      'Cloudflare Workers AI credentials or Pages Function /api/embed not configured.'
     );
     return null;
   }
@@ -85,7 +106,6 @@ export const generateBgeM3Embedding = async (
 
     const json = await response.json();
     if (json.success && json.result?.data) {
-      // Result data might be [ [0.1, 0.2, ...] ] or [0.1, 0.2, ...]
       const data = json.result.data;
       if (Array.isArray(data[0])) {
         return data[0];
@@ -95,7 +115,7 @@ export const generateBgeM3Embedding = async (
 
     return null;
   } catch (err) {
-    console.warn('Failed to call Cloudflare Workers AI bge-m3:', err);
+    console.warn('Failed to call Cloudflare Workers AI bge-m3 REST API:', err);
     return null;
   }
 };
