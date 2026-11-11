@@ -7,8 +7,7 @@ export const StreamColumn: React.FC = () => {
     notes,
     activeNoteId,
     setActiveNoteId,
-    activeNotebookId,
-    notebooks,
+    activeStreamFilter,
     searchQuery,
     setSearchQuery,
     createNote,
@@ -16,17 +15,13 @@ export const StreamColumn: React.FC = () => {
     discardNoteIfEmpty,
   } = useNoesis();
 
-  // Filter notes based on active notebook stream & search query
+  // Filter notes based on active stream & search query
   const filteredNotes = notes.filter((note) => {
-    // Notebook filtering
-    if (activeNotebookId === 'favorites') {
+    // Stream filtering
+    if (activeStreamFilter === 'favorites') {
       if (!note.favorite) return false;
-    } else if (activeNotebookId === 'archived') {
+    } else if (activeStreamFilter === 'archived') {
       if (!note.archived) return false;
-    } else if (activeNotebookId === 'recent') {
-      // Show first 10
-    } else if (activeNotebookId) {
-      if (note.notebookId !== activeNotebookId) return false;
     } else {
       if (note.archived) return false;
     }
@@ -44,13 +39,8 @@ export const StreamColumn: React.FC = () => {
   });
 
   const getStreamTitle = () => {
-    if (activeNotebookId === 'favorites') return 'Favorites';
-    if (activeNotebookId === 'archived') return 'Archived Notes';
-    if (activeNotebookId === 'recent') return 'Recent Notes';
-    if (activeNotebookId) {
-      const nb = notebooks.find((n) => n.id === activeNotebookId);
-      return nb ? nb.name : 'Notes';
-    }
+    if (activeStreamFilter === 'favorites') return 'Favorites';
+    if (activeStreamFilter === 'archived') return 'Archived Notes';
     return 'All Notes';
   };
 
@@ -137,7 +127,6 @@ export const StreamColumn: React.FC = () => {
         ) : (
           filteredNotes.map((note) => {
             const isSelected = note.id === activeNoteId;
-            const nb = notebooks.find((n) => n.id === note.notebookId);
             return (
               <div
                 key={note.id}
@@ -182,7 +171,7 @@ export const StreamColumn: React.FC = () => {
                   <span aria-hidden="true">·</span>
                   <span>{formatCardDate(note.updatedAt || note.createdAt)}</span>
                   <span aria-hidden="true">·</span>
-                  <span className="truncate">{nb?.name || 'Personal'}</span>
+                  <span>{note.wordCount || 0} words</span>
                 </div>
               </div>
             );

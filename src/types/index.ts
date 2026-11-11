@@ -15,13 +15,14 @@ export type RelicType = FragmentType;
 
 export type NoteType = 'reference' | 'thought' | 'idea';
 
+export type StreamFilter = 'all' | 'favorites' | 'archived';
+
 export interface Note {
   id: string;
   title: string;
   content: string; // HTML formatted for Tiptap
   excerpt: string;
   type: NoteType;
-  notebookId: string;
   tags: string[];
   source?: string;
   favorite: boolean;
@@ -31,14 +32,6 @@ export interface Note {
   updatedAt: string;
   wordCount: number;
   embeddedAt?: string;
-}
-
-
-export interface Notebook {
-  id: string;
-  name: string;
-  count: number;
-  description?: string;
 }
 
 export interface Fragment {

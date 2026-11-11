@@ -27,7 +27,6 @@ import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 export const LibraryPage: React.FC = () => {
   const {
     notes,
-    activeNotebookId,
     setActiveNoteId,
     setActiveView,
     createNote,
@@ -114,7 +113,7 @@ export const LibraryPage: React.FC = () => {
   };
 
   const handleCreateNew = () => {
-    const newId = createNote(activeNotebookId || undefined, (selectedType !== 'all' ? selectedType : 'thought') as NoteType);
+    const newId = createNote((selectedType !== 'all' ? selectedType : 'thought') as NoteType);
     setActiveNoteId(newId);
     setActiveView('editor');
   };

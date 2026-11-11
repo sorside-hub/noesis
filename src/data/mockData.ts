@@ -1,10 +1,4 @@
-import { Note, Notebook, Relic, Fragment, Project } from '../types';
-
-export const INITIAL_NOTEBOOKS: Notebook[] = [
-  { id: 'personal', name: 'Personal', count: 0, description: 'Personal reflections and thoughts' },
-  { id: 'reading', name: 'Reading', count: 0, description: 'Book notes and references' },
-  { id: 'ideas', name: 'Ideas', count: 0, description: 'Concepts and explorations' },
-];
+import { Note, Relic, Fragment, Project } from '../types';
 
 // Clean empty notes and fragments as requested
 export const INITIAL_NOTES: Note[] = [];

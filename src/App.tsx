@@ -11,6 +11,8 @@ import { LibraryPage } from './pages/LibraryPage';
 import { DiscoverPage } from './pages/DiscoverPage';
 import { ProjectsPage } from './pages/ProjectsPage';
 import { SettingsPage } from './pages/SettingsPage';
+import { OfflineIndicator } from './components/OfflineIndicator';
+import { PWAInstallButton } from './components/PWAInstallButton';
 import { Menu, Sun, Moon, Settings as SettingsIcon } from 'lucide-react';
 
 const WorkspaceShell: React.FC = () => {
@@ -121,6 +123,9 @@ const WorkspaceShell: React.FC = () => {
 
         {/* Unified Fragment Drawer (Handles Create and View/Edit) */}
         <FragmentDrawer />
+
+        {/* Offline Connectivity Indicator */}
+        <OfflineIndicator />
       </div>
     </div>
   );

@@ -13,6 +13,7 @@ import {
   Check,
   Plus,
   Quote,
+  Sparkles,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 
@@ -27,6 +28,7 @@ export const FragmentDrawer: React.FC = () => {
     deleteFragment,
     toggleStarFragment,
     manualEmbedFragment,
+    manualRemoveEmbedFragment,
   } = useNoesis();
 
   const activeFragment = fragments.find((f) => f.id === activeFragmentId);
@@ -48,6 +50,13 @@ export const FragmentDrawer: React.FC = () => {
     if (!activeFragment) return;
     setIsEmbeddingLoading(true);
     await manualEmbedFragment(activeFragment.id);
+    setIsEmbeddingLoading(false);
+  };
+
+  const handleRemoveFragmentEmbed = async () => {
+    if (!activeFragment) return;
+    setIsEmbeddingLoading(true);
+    await manualRemoveEmbedFragment(activeFragment.id);
     setIsEmbeddingLoading(false);
   };
 
@@ -434,6 +443,49 @@ export const FragmentDrawer: React.FC = () => {
               />
             </div>
           </div>
+
+          {/* Optional Vector Embedding (bge-m3) */}
+          {!isCreateMode && activeFragment && (
+            <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
+                  <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
+                  <span>AI Vector Embedding (bge-m3)</span>
+                </label>
+                <span className="text-[10px] font-mono text-[#9C9388]">Opsional</span>
+              </div>
+
+              <div className="flex items-center gap-2 pt-0.5">
+                <button
+                  type="button"
+                  onClick={handleTriggerFragmentEmbed}
+                  disabled={isEmbeddingLoading}
+                  className="flex-1 py-1.5 px-3 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                  <span>
+                    {isEmbeddingLoading
+                      ? 'Embedding...'
+                      : activeFragment.embeddedAt
+                      ? 'Re-sync Embedding'
+                      : 'Embed Fragment (Opsional)'}
+                  </span>
+                </button>
+
+                {activeFragment.embeddedAt && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveFragmentEmbed}
+                    disabled={isEmbeddingLoading}
+                    className="py-1.5 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                    title="Hapus vector embedding fragment ini"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
 
         {/* ========================================================================= */}

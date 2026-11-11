@@ -1,6 +1,6 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
-import { ViewMode, ThemePreference, Note, Notebook, Relic, Fragment, Project, RelicType, FragmentType, NoteType } from '../types';
-import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
+import { ViewMode, ThemePreference, Note, Relic, Fragment, Project, RelicType, FragmentType, NoteType, StreamFilter } from '../types';
+import { INITIAL_NOTES, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
 import {
   isSupabaseConfigured,
   fetchNotesFromSupabase,
@@ -25,8 +25,12 @@ interface NoesisContextType {
   // Navigation
   activeView: ViewMode;
   setActiveView: (view: ViewMode) => void;
+  activeStreamFilter: StreamFilter;
+  setActiveStreamFilter: (filter: StreamFilter) => void;
+  // Backward compatibility alias for stream filter
   activeNotebookId: string | null;
   setActiveNotebookId: (id: string | null) => void;
+
   activeNoteId: string;
   setActiveNoteId: (id: string) => void;
   searchQuery: string;
@@ -43,7 +47,7 @@ interface NoesisContextType {
   // Notes
   notes: Note[];
   activeNote: Note | undefined;
-  createNote: (notebookId?: string, type?: NoteType) => string;
+  createNote: (type?: NoteType) => string;
   updateNote: (id: string, updates: Partial<Note>) => void;
   deleteNote: (id: string) => void;
   discardNoteIfEmpty: (id: string) => boolean;
@@ -51,10 +55,6 @@ interface NoesisContextType {
   toggleArchiveNote: (id: string) => void;
   linkRelatedNote: (noteId: string, targetNoteId: string) => void;
   unlinkRelatedNote: (noteId: string, targetNoteId: string) => void;
-
-  // Notebooks
-  notebooks: Notebook[];
-  createNotebook: (name: string, description?: string) => void;
 
   // Fragments (Micro-notes & Captures)
   fragments: Fragment[];
@@ -96,27 +96,21 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return (saved as ThemePreference) || 'light';
   });
 
-  // Apply theme to HTML root
   useEffect(() => {
-    const root = document.documentElement;
     localStorage.setItem('noesis_theme', theme);
-
-    if (theme === 'system') {
-      const isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-      root.classList.toggle('dark', isDark);
+    const root = document.documentElement;
+    if (theme === 'dark') {
+      root.classList.add('dark');
+    } else if (theme === 'light') {
+      root.classList.remove('dark');
     } else {
-      root.classList.toggle('dark', theme === 'dark');
-    }
-
-    const mediaListener = (e: MediaQueryListEvent) => {
-      if (theme === 'system') {
-        root.classList.toggle('dark', e.matches);
+      // System preference
+      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+        root.classList.add('dark');
+      } else {
+        root.classList.remove('dark');
       }
-    };
-
-    const media = window.matchMedia('(prefers-color-scheme: dark)');
-    media.addEventListener('change', mediaListener);
-    return () => media.removeEventListener('change', mediaListener);
+    }
   }, [theme]);
 
   const setTheme = (newTheme: ThemePreference) => {
@@ -125,7 +119,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   // Views & Filter state
   const [activeView, setActiveView] = useState<ViewMode>('editor');
-  const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
+  const [activeStreamFilter, setActiveStreamFilter] = useState<StreamFilter>('all');
   const [activeNoteId, setActiveNoteId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
@@ -135,22 +129,16 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [activeFragmentId, setActiveFragmentId] = useState<string | null>(null);
   const [isFragmentDrawerOpen, setIsFragmentDrawerOpen] = useState<boolean>(false);
 
-  // Migration: clear out previously cached sample notes and fragments so user starts completely clean
-  useEffect(() => {
-    const hasCleanedSamples = localStorage.getItem('noesis_clean_empty_v2');
-    if (!hasCleanedSamples) {
-      localStorage.removeItem('noesis_notes');
-      localStorage.removeItem('noesis_fragments');
-      localStorage.removeItem('noesis_relics');
-      localStorage.setItem('noesis_clean_empty_v2', 'true');
-    }
-  }, []);
+  // Backward compatibility alias for activeNotebookId
+  const activeNotebookId = activeStreamFilter === 'all' ? null : activeStreamFilter;
+  const setActiveNotebookId = (id: string | null) => {
+    if (id === 'favorites') setActiveStreamFilter('favorites');
+    else if (id === 'archived') setActiveStreamFilter('archived');
+    else setActiveStreamFilter('all');
+  };
 
   // Entities state with localStorage caching (Offline-First)
   const [notes, setNotes] = useState<Note[]>(() => {
-    if (!localStorage.getItem('noesis_clean_empty_v2')) {
-      return [];
-    }
     const saved = localStorage.getItem('noesis_notes');
     if (saved) {
       try {
@@ -170,43 +158,21 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         return [];
       }
     }
-    return [];
-  });
-
-  const [notebooks, setNotebooks] = useState<Notebook[]>(() => {
-    const saved = localStorage.getItem('noesis_notebooks');
-    if (saved) {
-      try {
-        return JSON.parse(saved);
-      } catch {
-        return INITIAL_NOTEBOOKS;
-      }
-    }
-    return INITIAL_NOTEBOOKS;
+    return INITIAL_NOTES;
   });
 
   const [fragments, setFragments] = useState<Fragment[]>(() => {
-    if (!localStorage.getItem('noesis_clean_empty_v2')) {
-      return [];
-    }
     const saved = localStorage.getItem('noesis_fragments') || localStorage.getItem('noesis_relics');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return Array.isArray(parsed)
-          ? parsed.map((f: any) => ({
-              ...f,
-              type: (f.type === 'thought' || f.type === 'reference' || f.type === 'idea') ? f.type : 'thought',
-            }))
-          : [];
+        return Array.isArray(parsed) ? parsed : [];
       } catch {
         return [];
       }
     }
-    return [];
+    return INITIAL_FRAGMENTS;
   });
-
-  const relics = fragments; // alias
 
   const [projects, setProjects] = useState<Project[]>(() => {
     const saved = localStorage.getItem('noesis_projects');
@@ -220,91 +186,71 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return INITIAL_PROJECTS;
   });
 
-  // Save changes locally (Offline-First storage)
+  // Sync statuses
+  const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(isSupabaseConfigured());
+  const [isCloudflareConnected, setIsCloudflareConnected] = useState<boolean>(isCloudflareAiConfigured());
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
+
+  // Debounce ref for auto-embedding notes
+  const embedTimersRef = useRef<{ [noteId: string]: NodeJS.Timeout }>({});
+
+  // Sync entities to localStorage on state changes
   useEffect(() => {
     localStorage.setItem('noesis_notes', JSON.stringify(notes));
   }, [notes]);
-
-  useEffect(() => {
-    localStorage.setItem('noesis_notebooks', JSON.stringify(notebooks));
-  }, [notebooks]);
 
   useEffect(() => {
     localStorage.setItem('noesis_fragments', JSON.stringify(fragments));
     localStorage.setItem('noesis_relics', JSON.stringify(fragments));
   }, [fragments]);
 
-  // Supabase & Cloudflare AI status
-  const isSupabaseConnected = isSupabaseConfigured();
-  const isCloudflareConnected = isCloudflareAiConfigured();
-  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>(() => {
-    return isSupabaseConfigured() ? 'syncing' : 'offline';
-  });
-  const embedTimersRef = useRef<Record<string, any>>({});
-
-  // Multi-Device Synchronization: Supabase as authoritative source of truth
   useEffect(() => {
-    if (!isSupabaseConfigured()) {
-      setSyncStatus('offline');
-      return;
-    }
+    localStorage.setItem('noesis_projects', JSON.stringify(projects));
+  }, [projects]);
+
+  // Initial Supabase Sync & Realtime Listeners
+  useEffect(() => {
+    if (!isSupabaseConfigured()) return;
 
     let isMounted = true;
-    setSyncStatus('syncing');
-
-    const initSupabase = async () => {
+    const initSupabaseSync = async () => {
       try {
         const [dbNotes, dbFragments] = await Promise.all([
           fetchNotesFromSupabase(),
           fetchFragmentsFromSupabase(),
         ]);
 
-        if (!isMounted) return;
-
-        // When Supabase responds with data, it is authoritative across all devices
-        if (dbNotes !== null) {
+        if (dbNotes !== null && isMounted) {
           setNotes(dbNotes);
-          localStorage.setItem('noesis_notes', JSON.stringify(dbNotes));
-          if (dbNotes.length > 0) {
-            setActiveNoteId((prev) => (dbNotes.some((n) => n.id === prev) ? prev : dbNotes[0].id));
-          } else {
-            setActiveNoteId('');
+          if (dbNotes.length > 0 && !activeNoteId) {
+            setActiveNoteId(dbNotes[0].id);
           }
         }
 
-        if (dbFragments !== null) {
+        if (dbFragments !== null && isMounted) {
           setFragments(dbFragments);
-          localStorage.setItem('noesis_fragments', JSON.stringify(dbFragments));
         }
 
-        setSyncStatus('synced');
+        setIsSupabaseConnected(true);
       } catch (err) {
-        console.warn('Initial Supabase fetch error:', err);
-        if (isMounted) setSyncStatus('offline');
+        console.warn('Initial Supabase sync failed, using offline cache:', err);
       }
     };
 
-    initSupabase();
+    initSupabaseSync();
 
-    // Subscribe to realtime database changes from other devices/tabs
+    // Subscribe to realtime changes
     const unsubscribe = subscribeToRealtimeChanges(
       async () => {
         const latestNotes = await fetchNotesFromSupabase();
         if (latestNotes !== null && isMounted) {
           setNotes(latestNotes);
-          localStorage.setItem('noesis_notes', JSON.stringify(latestNotes));
-          if (latestNotes.length > 0) {
-            setActiveNoteId((prev) => (latestNotes.some((n) => n.id === prev) ? prev : latestNotes[0].id));
-          } else {
-            setActiveNoteId('');
-          }
         }
       },
       async () => {
         const latestFragments = await fetchFragmentsFromSupabase();
         if (latestFragments !== null && isMounted) {
           setFragments(latestFragments);
-          localStorage.setItem('noesis_fragments', JSON.stringify(latestFragments));
         }
       }
     );
@@ -322,15 +268,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Handlers
   const toggleSidebar = () => setIsSidebarCollapsed((prev) => !prev);
 
-  const createNote = (notebookId?: string, type?: NoteType): string => {
-    const targetNotebook = notebookId || activeNotebookId || 'personal';
+  const createNote = (type?: NoteType): string => {
     const newNote: Note = {
       id: `note-${Date.now()}`,
       title: '',
       content: '<p></p>',
       excerpt: 'Begin writing your reflections...',
       type: type || 'thought',
-      notebookId: targetNotebook,
       tags: ['reflection'],
       favorite: false,
       archived: false,
@@ -343,11 +287,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setNotes((prev) => [newNote, ...prev]);
     setActiveNoteId(newNote.id);
     setActiveView('editor');
-
-    // Update notebook count
-    setNotebooks((prev) =>
-      prev.map((nb) => (nb.id === targetNotebook ? { ...nb, count: nb.count + 1 } : nb))
-    );
 
     if (isSupabaseConfigured()) {
       upsertNoteToSupabase(newNote).catch(console.warn);
@@ -422,7 +361,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const isNoteEffectivelyEmpty = (note: Note): boolean => {
     const hasTitle = Boolean(note.title && note.title.trim().length > 0);
-    // Strip HTML tags and whitespace
     const plainText = (note.content || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
     return !hasTitle && plainText.length === 0;
   };
@@ -436,9 +374,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       if (activeNoteId === id && remaining.length > 0) {
         setActiveNoteId(remaining[0].id);
       }
-      setNotebooks((prev) =>
-        prev.map((nb) => (nb.id === target.notebookId ? { ...nb, count: Math.max(0, nb.count - 1) } : nb))
-      );
 
       if (isSupabaseConfigured()) {
         deleteNoteFromSupabase(id).catch(console.warn);
@@ -449,16 +384,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const deleteNote = (id: string) => {
-    const target = notes.find((n) => n.id === id);
     const remaining = notes.filter((n) => n.id !== id);
     setNotes(remaining);
     if (remaining.length > 0) {
       setActiveNoteId(remaining[0].id);
-    }
-    if (target) {
-      setNotebooks((prev) =>
-        prev.map((nb) => (nb.id === target.notebookId ? { ...nb, count: Math.max(0, nb.count - 1) } : nb))
-      );
     }
 
     if (isSupabaseConfigured()) {
@@ -490,16 +419,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         return n;
       })
     );
-  };
-
-  const createNotebook = (name: string, description?: string) => {
-    const newNb: Notebook = {
-      id: `nb-${Date.now()}`,
-      name,
-      count: 0,
-      description,
-    };
-    setNotebooks((prev) => [...prev, newNb]);
   };
 
   const openFragmentDrawer = (fragmentId?: string | null) => {
@@ -536,7 +455,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setFragments((prev) => [newFragment, ...prev]);
 
     if (isSupabaseConfigured()) {
-      embedAndSyncFragment(newFragment).catch(console.warn);
+      upsertFragmentToSupabase(newFragment, null).catch(console.warn);
     }
 
     return id;
@@ -556,14 +475,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     );
 
     if (isSupabaseConfigured() && updatedFragObj) {
-      if (embedTimersRef.current[id]) {
-        clearTimeout(embedTimersRef.current[id]);
-      }
-      embedTimersRef.current[id] = setTimeout(() => {
-        if (updatedFragObj) {
-          embedAndSyncFragment(updatedFragObj).catch(console.warn);
-        }
-      }, 1500);
+      upsertFragmentToSupabase(updatedFragObj, null).catch(console.warn);
     }
   };
 
@@ -582,7 +494,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       prev.map((f) => {
         if (f.id === id) {
           const updated = { ...f, starred: !f.starred };
-          if (isSupabaseConfigured()) upsertFragmentToSupabase(updated).catch(console.warn);
+          if (isSupabaseConfigured()) upsertFragmentToSupabase(updated, null).catch(console.warn);
           return updated;
         }
         return f;
@@ -590,7 +502,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     );
   };
 
-  // Backwards compatibility wrappers
   const createRelic = (data: { type: RelicType; title: string; content: string; tags: string[]; source?: string }) => {
     createFragment(data);
   };
@@ -606,18 +517,15 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const toggleProjectMilestone = (projectId: string, milestoneId: string) => {
     setProjects((prev) =>
       prev.map((p) => {
-        if (p.id !== projectId) return p;
-        const updatedMilestones = p.milestones.map((m) =>
-          m.id === milestoneId ? { ...m, completed: !m.completed } : m
-        );
-        const completedCount = updatedMilestones.filter((m) => m.completed).length;
-        const newProgress = Math.round((completedCount / updatedMilestones.length) * 100);
-        return {
-          ...p,
-          milestones: updatedMilestones,
-          progress: newProgress,
-          status: newProgress === 100 ? 'completed' : p.status,
-        };
+        if (p.id === projectId) {
+          const updatedMilestones = p.milestones.map((m) =>
+            m.id === milestoneId ? { ...m, completed: !m.completed } : m
+          );
+          const completedCount = updatedMilestones.filter((m) => m.completed).length;
+          const progress = Math.round((completedCount / updatedMilestones.length) * 100);
+          return { ...p, milestones: updatedMilestones, progress };
+        }
+        return p;
       })
     );
   };
@@ -637,7 +545,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
 
     for (const frag of fragments) {
-      const ok = await embedAndSyncFragment(frag);
+      const ok = await upsertFragmentToSupabase(frag, null);
       if (ok) fragmentsCount++;
     }
 
@@ -712,6 +620,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setTheme,
         activeView,
         setActiveView,
+        activeStreamFilter,
+        setActiveStreamFilter,
         activeNotebookId,
         setActiveNotebookId,
         activeNoteId,
@@ -741,8 +651,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleArchiveNote,
         linkRelatedNote,
         unlinkRelatedNote,
-        notebooks,
-        createNotebook,
         fragments,
         relics: fragments,
         createFragment,

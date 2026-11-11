@@ -12,8 +12,10 @@ import {
   Copy,
   Code2,
   Sparkles,
+  Smartphone,
 } from 'lucide-react';
-import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
+import { PWAInstallButton } from '../components/PWAInstallButton';
+import { INITIAL_NOTES, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
 import { SUPABASE_SQL_SCRIPT } from '../data/supabaseSchema';
 import { getSupabaseUrl, getSupabaseAnonKey } from '../lib/supabase';
 import { getCloudflareAccountId, getCloudflareApiToken } from '../lib/cloudflareEmbedding';
@@ -105,7 +107,6 @@ export const SettingsPage: React.FC = () => {
   const handleResetData = () => {
     if (confirm('Reset all notes and relics to default editorial sample content?')) {
       localStorage.setItem('noesis_notes', JSON.stringify(INITIAL_NOTES));
-      localStorage.setItem('noesis_notebooks', JSON.stringify(INITIAL_NOTEBOOKS));
       localStorage.setItem('noesis_relics', JSON.stringify(INITIAL_RELICS));
       localStorage.setItem('noesis_projects', JSON.stringify(INITIAL_PROJECTS));
       setResetNotice(true);
@@ -129,6 +130,29 @@ export const SettingsPage: React.FC = () => {
           <p className="text-sm text-[#6B635B] dark:text-[#A8A196] mt-1">
             Customize typography and manage your local offline archive. Theme preference is controlled via the header/sidebar toggle.
           </p>
+        </div>
+
+        {/* PWA App Installation & Offline Status */}
+        <div className="p-6 sm:p-7 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center">
+                <Smartphone size={20} />
+              </div>
+              <div>
+                <h2 className="font-serif text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Progressive Web App (PWA)
+                </h2>
+                <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5">
+                  Pasang Noesis langsung ke Home Screen perangkat HP/Desktop untuk pengalaman layaknya aplikasi native (Offline-First).
+                </p>
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-2">
+            <PWAInstallButton variant="header" />
+          </div>
         </div>
 
         {/* Typography & Reading Rhythm */}

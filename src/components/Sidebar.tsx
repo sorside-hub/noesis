@@ -1,5 +1,6 @@
 import React from 'react';
 import { useNoesis } from '../context/NoesisContext';
+import { PWAInstallButton } from './PWAInstallButton';
 import { ViewMode } from '../types';
 import {
   Compass,
@@ -251,6 +252,9 @@ export const Sidebar: React.FC = () => {
 
       {/* Footer & Theme Switcher */}
       <div className="p-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex flex-col gap-3">
+        {/* PWA Install Button */}
+        <PWAInstallButton variant="sidebar" />
+
         {/* Theme Segmented Control (Light, Dark, System) */}
         <div className="flex items-center justify-between bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] p-1 rounded-xl">
           <button
