@@ -68,11 +68,16 @@ export const toDbNote = (note: Note, embedding?: number[] | null) => {
     word_count: note.wordCount || 0,
     created_at: note.createdAt || new Date().toISOString(),
     updated_at: note.updatedAt || new Date().toISOString(),
+    embedded_at: note.embeddedAt || null,
   };
 
   if (embedding !== undefined) {
     row.embedding = embedding;
-    row.embedded_at = embedding ? new Date().toISOString() : null;
+    if (embedding) {
+      row.embedded_at = new Date().toISOString();
+    } else {
+      row.embedded_at = null;
+    }
   }
 
   return row;
@@ -94,6 +99,7 @@ export const fromDbNote = (row: any): Note => {
     createdAt: row.created_at || new Date().toISOString(),
     updatedAt: row.updated_at || new Date().toISOString(),
     wordCount: Number(row.word_count) || 0,
+    embeddedAt: row.embedded_at || undefined,
   };
 };
 
@@ -107,11 +113,16 @@ export const toDbFragment = (frag: Fragment, embedding?: number[] | null) => {
     date: frag.date || new Date().toLocaleDateString('en-GB'),
     source: frag.source || null,
     starred: Boolean(frag.starred),
+    embedded_at: frag.embeddedAt || null,
   };
 
   if (embedding !== undefined) {
     row.embedding = embedding;
-    row.embedded_at = embedding ? new Date().toISOString() : null;
+    if (embedding) {
+      row.embedded_at = new Date().toISOString();
+    } else {
+      row.embedded_at = null;
+    }
   }
 
   return row;
@@ -127,6 +138,7 @@ export const fromDbFragment = (row: any): Fragment => {
     date: row.date || new Date().toLocaleDateString('en-GB'),
     source: row.source || undefined,
     starred: Boolean(row.starred),
+    embeddedAt: row.embedded_at || undefined,
   };
 };
 

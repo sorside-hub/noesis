@@ -26,6 +26,7 @@ export const FragmentDrawer: React.FC = () => {
     updateFragment,
     deleteFragment,
     toggleStarFragment,
+    manualEmbedFragment,
   } = useNoesis();
 
   const activeFragment = fragments.find((f) => f.id === activeFragmentId);
@@ -41,6 +42,43 @@ export const FragmentDrawer: React.FC = () => {
   const [isCopied, setIsCopied] = useState(false);
   const [isSavedNotice, setIsSavedNotice] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [isEmbeddingLoading, setIsEmbeddingLoading] = useState(false);
+
+  const handleTriggerFragmentEmbed = async () => {
+    if (!activeFragment) return;
+    setIsEmbeddingLoading(true);
+    await manualEmbedFragment(activeFragment.id);
+    setIsEmbeddingLoading(false);
+  };
+
+  const getEmbedStatus = () => {
+    if (!activeFragment?.embeddedAt) {
+      return {
+        label: 'Not Embedded',
+        dotClass: 'bg-stone-400 dark:bg-stone-500',
+        pulse: false,
+        tooltip: 'Status Embedding: Belum Ter-embed',
+      };
+    }
+    const lastModified = activeFragment.updatedAt || activeFragment.date;
+    const isOutdated =
+      lastModified &&
+      new Date(lastModified).getTime() - new Date(activeFragment.embeddedAt).getTime() > 3000;
+    if (isOutdated) {
+      return {
+        label: 'Needs Update',
+        dotClass: 'bg-amber-500 shadow-xs shadow-amber-500/50',
+        pulse: true,
+        tooltip: 'Status Embedding: Butuh Update (Disunting)',
+      };
+    }
+    return {
+      label: 'Synced & Embedded',
+      dotClass: 'bg-emerald-500 shadow-xs shadow-emerald-500/50',
+      pulse: false,
+      tooltip: 'Status Embedding: Synced & Embedded (Up-to-date)',
+    };
+  };
 
   useEffect(() => {
     if (activeFragment) {
@@ -205,6 +243,29 @@ export const FragmentDrawer: React.FC = () => {
 
             {/* Action Toolbar */}
             <div className="flex items-center gap-1">
+              {/* Embedding Status Indicator Dot */}
+              {(() => {
+                const status = getEmbedStatus();
+                return (
+                  <button
+                    type="button"
+                    onClick={handleTriggerFragmentEmbed}
+                    disabled={isEmbeddingLoading}
+                    title={`${status.tooltip} — Klik untuk ${activeFragment.embeddedAt ? 're-sync' : 'embed'}`}
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors text-[#6B635B] dark:text-[#A8A196] group cursor-pointer"
+                  >
+                    <span
+                      className={`w-2.5 h-2.5 rounded-full ${status.dotClass} ${
+                        isEmbeddingLoading ? 'animate-ping' : status.pulse ? 'animate-pulse' : ''
+                      }`}
+                    />
+                    <span className="hidden sm:inline text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] group-hover:text-[#221F1D] dark:group-hover:text-[#EDE8E1] transition-colors">
+                      {status.label}
+                    </span>
+                  </button>
+                );
+              })()}
+
               {/* Favorite Star */}
               <button
                 type="button"

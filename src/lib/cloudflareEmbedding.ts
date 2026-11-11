@@ -128,12 +128,10 @@ export const embedAndSyncNote = async (note: Note): Promise<boolean> => {
   const vector = await generateBgeM3Embedding(textToEmbed);
 
   if (vector && vector.length === 1024 && isSupabaseConfigured()) {
-    return await upsertNoteToSupabase(note, vector);
-  }
-
-  // If no Cloudflare AI credentials, still upsert without vector
-  if (isSupabaseConfigured()) {
-    return await upsertNoteToSupabase(note);
+    const embeddedAt = new Date().toISOString();
+    const noteWithTimestamp = { ...note, embeddedAt };
+    const ok = await upsertNoteToSupabase(noteWithTimestamp, vector);
+    return ok;
   }
 
   return false;
@@ -147,11 +145,10 @@ export const embedAndSyncFragment = async (frag: Fragment): Promise<boolean> => 
   const vector = await generateBgeM3Embedding(textToEmbed);
 
   if (vector && vector.length === 1024 && isSupabaseConfigured()) {
-    return await upsertFragmentToSupabase(frag, vector);
-  }
-
-  if (isSupabaseConfigured()) {
-    return await upsertFragmentToSupabase(frag);
+    const embeddedAt = new Date().toISOString();
+    const fragWithTimestamp = { ...frag, embeddedAt };
+    const ok = await upsertFragmentToSupabase(fragWithTimestamp, vector);
+    return ok;
   }
 
   return false;

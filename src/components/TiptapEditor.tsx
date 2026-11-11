@@ -359,8 +359,59 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
             </span>
           </div>
 
-          {/* Right: Favorite (Stand-alone), Document Actions Menu, and Drawer Toggle */}
+          {/* Right: Embedding Status Dot, Favorite, Document Actions Menu, and Drawer Toggle */}
           <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
+            {/* Embedding Status Indicator Dot (Left of Favorite Star) */}
+            {(() => {
+              const getEmbedStatus = () => {
+                if (!activeNote.embeddedAt) {
+                  return {
+                    label: 'Not Embedded',
+                    dotClass: 'bg-stone-400 dark:bg-stone-500',
+                    pulse: false,
+                    tooltip: 'Status Embedding: Belum Ter-embed',
+                  };
+                }
+                const isOutdated =
+                  activeNote.updatedAt &&
+                  new Date(activeNote.updatedAt).getTime() - new Date(activeNote.embeddedAt).getTime() > 3000;
+                if (isOutdated) {
+                  return {
+                    label: 'Needs Update',
+                    dotClass: 'bg-amber-500 shadow-xs shadow-amber-500/50',
+                    pulse: true,
+                    tooltip: 'Status Embedding: Butuh Update (Disunting)',
+                  };
+                }
+                return {
+                  label: 'Synced & Embedded',
+                  dotClass: 'bg-emerald-500 shadow-xs shadow-emerald-500/50',
+                  pulse: false,
+                  tooltip: 'Status Embedding: Synced & Embedded (Up-to-date)',
+                };
+              };
+              const status = getEmbedStatus();
+
+              return (
+                <button
+                  type="button"
+                  onClick={handleTriggerEmbed}
+                  disabled={isEmbeddingLoading}
+                  title={`${status.tooltip} — Klik untuk ${activeNote.embeddedAt ? 're-sync' : 'embed'}`}
+                  className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors text-[#6B635B] dark:text-[#A8A196] group cursor-pointer"
+                >
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${status.dotClass} ${
+                      isEmbeddingLoading ? 'animate-ping' : status.pulse ? 'animate-pulse' : ''
+                    }`}
+                  />
+                  <span className="hidden sm:inline text-[11px] font-mono text-[#9C9388] dark:text-[#736C62] group-hover:text-[#221F1D] dark:group-hover:text-[#EDE8E1] transition-colors">
+                    {status.label}
+                  </span>
+                </button>
+              );
+            })()}
+
             {/* 1. Favorite Star (Berdiri Sendiri) */}
             <button
               onClick={() => toggleFavoriteNote(activeNote.id)}
@@ -916,7 +967,37 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
               </div>
 
-              <div className="flex items-center gap-2">
+              {/* Status Badge */}
+              <div className="flex items-center justify-between pt-0.5">
+                <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
+                {(() => {
+                  if (!activeNote.embeddedAt) {
+                    return (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
+                        Not Embedded
+                      </span>
+                    );
+                  }
+                  const isOutdated =
+                    new Date(activeNote.updatedAt).getTime() -
+                      new Date(activeNote.embeddedAt).getTime() >
+                    3000;
+                  if (isOutdated) {
+                    return (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/40">
+                        Needs Update
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/40">
+                      Synced & Embedded
+                    </span>
+                  );
+                })()}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
                 <button
                   type="button"
                   onClick={handleTriggerEmbed}
@@ -924,18 +1005,20 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                   className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
                 >
                   <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                  <span>{isEmbeddingLoading ? 'Embedding...' : 'Embed Note'}</span>
+                  <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={handleRemoveEmbed}
-                  disabled={isEmbeddingLoading}
-                  className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
-                  title="Hapus vector embedding"
-                >
-                  <Trash2 size={13} />
-                </button>
+                {activeNote.embeddedAt && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveEmbed}
+                    disabled={isEmbeddingLoading}
+                    className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                    title="Hapus vector embedding"
+                  >
+                    <Trash2 size={13} />
+                  </button>
+                )}
               </div>
 
               {embedNotice && (
@@ -1078,7 +1161,37 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
               </div>
 
-              <div className="flex items-center gap-2">
+              {/* Status Badge */}
+              <div className="flex items-center justify-between pt-0.5">
+                <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
+                {(() => {
+                  if (!activeNote.embeddedAt) {
+                    return (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
+                        Not Embedded
+                      </span>
+                    );
+                  }
+                  const isOutdated =
+                    new Date(activeNote.updatedAt).getTime() -
+                      new Date(activeNote.embeddedAt).getTime() >
+                    3000;
+                  if (isOutdated) {
+                    return (
+                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/40">
+                        Needs Update
+                      </span>
+                    );
+                  }
+                  return (
+                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/40">
+                      Synced & Embedded
+                    </span>
+                  );
+                })()}
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
                 <button
                   type="button"
                   onClick={handleTriggerEmbed}
@@ -1086,18 +1199,20 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                   className="flex-1 py-2 px-3 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
                 >
                   <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                  <span>{isEmbeddingLoading ? 'Embedding...' : 'Embed Note'}</span>
+                  <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
                 </button>
 
-                <button
-                  type="button"
-                  onClick={handleRemoveEmbed}
-                  disabled={isEmbeddingLoading}
-                  className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
-                  title="Hapus vector embedding"
-                >
-                  <Trash2 size={14} />
-                </button>
+                {activeNote.embeddedAt && (
+                  <button
+                    type="button"
+                    onClick={handleRemoveEmbed}
+                    disabled={isEmbeddingLoading}
+                    className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                    title="Hapus vector embedding"
+                  >
+                    <Trash2 size={14} />
+                  </button>
+                )}
               </div>
 
               {embedNotice && (

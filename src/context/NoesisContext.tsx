@@ -83,6 +83,8 @@ interface NoesisContextType {
   syncAllToSupabase: () => Promise<{ success: boolean; notesCount: number; fragmentsCount: number }>;
   manualEmbedNote: (noteId: string) => Promise<boolean>;
   manualRemoveEmbedNote: (noteId: string) => Promise<boolean>;
+  manualEmbedFragment: (fragmentId: string) => Promise<boolean>;
+  manualRemoveEmbedFragment: (fragmentId: string) => Promise<boolean>;
 }
 
 const NoesisContext = createContext<NoesisContextType | undefined>(undefined);
@@ -647,7 +649,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const manualEmbedNote = async (noteId: string): Promise<boolean> => {
     const target = notes.find((n) => n.id === noteId);
     if (!target) return false;
-    return await embedAndSyncNote(target);
+    const ok = await embedAndSyncNote(target);
+    if (ok) {
+      const nowIso = new Date().toISOString();
+      setNotes((prev) =>
+        prev.map((n) => (n.id === noteId ? { ...n, embeddedAt: nowIso } : n))
+      );
+    }
+    return ok;
   };
 
   // Manual remove embed for note
@@ -655,7 +664,43 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const target = notes.find((n) => n.id === noteId);
     if (!target) return false;
     if (isSupabaseConfigured()) {
-      return await upsertNoteToSupabase(target, null);
+      const ok = await upsertNoteToSupabase({ ...target, embeddedAt: undefined }, null);
+      if (ok) {
+        setNotes((prev) =>
+          prev.map((n) => (n.id === noteId ? { ...n, embeddedAt: undefined } : n))
+        );
+      }
+      return ok;
+    }
+    return true;
+  };
+
+  // Manual embed single fragment
+  const manualEmbedFragment = async (fragmentId: string): Promise<boolean> => {
+    const target = fragments.find((f) => f.id === fragmentId);
+    if (!target) return false;
+    const ok = await embedAndSyncFragment(target);
+    if (ok) {
+      const nowIso = new Date().toISOString();
+      setFragments((prev) =>
+        prev.map((f) => (f.id === fragmentId ? { ...f, embeddedAt: nowIso } : f))
+      );
+    }
+    return ok;
+  };
+
+  // Manual remove embed for fragment
+  const manualRemoveEmbedFragment = async (fragmentId: string): Promise<boolean> => {
+    const target = fragments.find((f) => f.id === fragmentId);
+    if (!target) return false;
+    if (isSupabaseConfigured()) {
+      const ok = await upsertFragmentToSupabase({ ...target, embeddedAt: undefined }, null);
+      if (ok) {
+        setFragments((prev) =>
+          prev.map((f) => (f.id === fragmentId ? { ...f, embeddedAt: undefined } : f))
+        );
+      }
+      return ok;
     }
     return true;
   };
@@ -715,6 +760,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         syncAllToSupabase,
         manualEmbedNote,
         manualRemoveEmbedNote,
+        manualEmbedFragment,
+        manualRemoveEmbedFragment,
       }}
     >
       {children}

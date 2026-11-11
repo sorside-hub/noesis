@@ -30,6 +30,7 @@ export interface Note {
   createdAt: string;
   updatedAt: string;
   wordCount: number;
+  embeddedAt?: string;
 }
 
 
@@ -49,6 +50,8 @@ export interface Fragment {
   date: string;
   source?: string;
   starred?: boolean;
+  embeddedAt?: string;
+  updatedAt?: string;
 }
 
 export type Relic = Fragment;
