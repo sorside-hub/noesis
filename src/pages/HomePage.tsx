@@ -80,9 +80,24 @@ export const HomePage: React.FC = () => {
             <blockquote className="font-serif italic text-xl sm:text-2xl text-[#221F1D] dark:text-[#EDE8E1] leading-relaxed">
               “The secret of happiness is not found in seeking more, but in developing the capacity to enjoy less.”
             </blockquote>
-            <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-3 font-mono">
-              From your notebook: <span className="underline cursor-pointer" onClick={() => { setActiveNoteId('note-1'); setActiveView('editor'); }}>Thoughts on Minimalism</span>
-            </p>
+            {notes.length > 0 ? (
+              <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-3 font-mono">
+                From your library:{' '}
+                <span
+                  className="underline cursor-pointer"
+                  onClick={() => {
+                    setActiveNoteId(notes[0].id);
+                    setActiveView('editor');
+                  }}
+                >
+                  {notes[0].title || 'Untitled Note'}
+                </span>
+              </p>
+            ) : (
+              <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-3 font-mono italic">
+                Ruang tenang untuk menata ide, merangkai pemikiran, dan merekam inspirasi.
+              </p>
+            )}
           </div>
         </div>
 
@@ -155,57 +170,77 @@ export const HomePage: React.FC = () => {
             </div>
 
             <div className="space-y-3">
-              {recentNotes.map((note) => {
-                const formatDate = (dateStr: string) => {
-                  const d = new Date(dateStr);
-                  return `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })}, ${d.getFullYear()}`;
-                };
-
-                return (
-                  <div
-                    key={note.id}
+              {recentNotes.length === 0 ? (
+                <div className="p-8 rounded-2xl border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] text-center bg-white/40 dark:bg-[#1E1C1A]/40">
+                  <BookOpen size={24} className="mx-auto text-[#9C9388] mb-2" />
+                  <p className="font-serif italic text-sm text-[#6B635B] dark:text-[#A8A196]">
+                    Belum ada catatan yang ditulis
+                  </p>
+                  <button
                     onClick={() => {
-                      setActiveNoteId(note.id);
+                      const id = createNote();
+                      setActiveNoteId(id);
                       setActiveView('editor');
                     }}
-                    className="p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group"
+                    className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1.5"
                   >
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C]">
-                          {note.type || 'thought'}
+                    <Feather size={12} />
+                    <span>Tulis catatan pertama</span>
+                  </button>
+                </div>
+              ) : (
+                recentNotes.map((note) => {
+                  const formatDate = (dateStr: string) => {
+                    const d = new Date(dateStr);
+                    return `${d.getDate()} ${d.toLocaleDateString('en-US', { month: 'short' })}, ${d.getFullYear()}`;
+                  };
+
+                  return (
+                    <div
+                      key={note.id}
+                      onClick={() => {
+                        setActiveNoteId(note.id);
+                        setActiveView('editor');
+                      }}
+                      className="p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C]">
+                            {note.type || 'thought'}
+                          </span>
+                          <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                            {note.title || 'Untitled Note'}
+                          </h3>
+                        </div>
+                        <span className="text-[11px] font-mono tabular-nums text-[#9C9388] dark:text-[#736C62]">
+                          {note.wordCount} words
                         </span>
-                        <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
-                          {note.title}
-                        </h3>
                       </div>
-                      <span className="text-[11px] font-mono tabular-nums text-[#9C9388] dark:text-[#736C62]">
-                        {note.wordCount} words
-                      </span>
-                    </div>
 
-                    <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 mt-1 leading-relaxed">
-                      {note.excerpt}
-                    </p>
+                      <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 mt-1 leading-relaxed">
+                        {note.excerpt}
+                      </p>
 
-                    <div className="flex items-center gap-2 text-[11px] text-[#9C9388] dark:text-[#736C62] mt-3 font-mono">
-                      <span>{formatDate(note.updatedAt)}</span>
-                      {note.tags.length > 0 && (
-                        <>
-                          <span>·</span>
-                          <span>#{note.tags[0]}</span>
-                        </>
-                      )}
-                      {note.relatedNoteIds && note.relatedNoteIds.length > 0 && (
-                        <>
-                          <span>·</span>
-                          <span>{note.relatedNoteIds.length} related</span>
-                        </>
-                      )}
+                      <div className="flex items-center gap-2 text-[11px] text-[#9C9388] dark:text-[#736C62] mt-3 font-mono">
+                        <span>{formatDate(note.updatedAt)}</span>
+                        {note.tags && note.tags.length > 0 && (
+                          <>
+                            <span>·</span>
+                            <span>#{note.tags[0]}</span>
+                          </>
+                        )}
+                        {note.relatedNoteIds && note.relatedNoteIds.length > 0 && (
+                          <>
+                            <span>·</span>
+                            <span>{note.relatedNoteIds.length} related</span>
+                          </>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -225,39 +260,55 @@ export const HomePage: React.FC = () => {
             </div>
 
             <div className="space-y-3">
-              {starredFragments.map((fragment) => (
-                <div
-                  key={fragment.id}
-                  onClick={() => openFragmentDrawer(fragment.id)}
-                  className="p-4 rounded-xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] flex flex-col justify-between cursor-pointer transition-all shadow-2xs group"
-                >
-                  <div>
-                    <div className="flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62] mb-1">
-                      <span className="uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] font-semibold text-[10px]">
-                        {fragment.type}
-                      </span>
-                      <span>{fragment.date}</span>
+              {starredFragments.length === 0 ? (
+                <div className="p-8 rounded-2xl border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] text-center bg-white/40 dark:bg-[#1E1C1A]/40">
+                  <Feather size={24} className="mx-auto text-[#9C9388] mb-2" />
+                  <p className="font-serif italic text-sm text-[#6B635B] dark:text-[#A8A196]">
+                    {fragments.length === 0 ? 'Belum ada fragment tersimpan' : 'Belum ada fragment berbintang'}
+                  </p>
+                  <button
+                    onClick={() => openFragmentDrawer(null)}
+                    className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1.5"
+                  >
+                    <Feather size={12} />
+                    <span>Capture fragment</span>
+                  </button>
+                </div>
+              ) : (
+                starredFragments.map((fragment) => (
+                  <div
+                    key={fragment.id}
+                    onClick={() => openFragmentDrawer(fragment.id)}
+                    className="p-4 rounded-xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] flex flex-col justify-between cursor-pointer transition-all shadow-2xs group"
+                  >
+                    <div>
+                      <div className="flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62] mb-1">
+                        <span className="uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] font-semibold text-[10px]">
+                          {fragment.type}
+                        </span>
+                        <span>{fragment.date}</span>
+                      </div>
+
+                      <h4 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                        {fragment.title}
+                      </h4>
+
+                      <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-3 mt-1 leading-relaxed">
+                        {fragment.content}
+                      </p>
                     </div>
 
-                    <h4 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
-                      {fragment.title}
-                    </h4>
-
-                    <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-3 mt-1 leading-relaxed">
-                      {fragment.content}
-                    </p>
+                    <div className="flex items-center gap-1.5 mt-3 text-[10px] text-[#9C9388] font-mono">
+                      {fragment.tags.map((t, idx) => (
+                        <span key={t}>
+                          #{t}
+                          {idx < fragment.tags.length - 1 ? ' · ' : ''}
+                        </span>
+                      ))}
+                    </div>
                   </div>
-
-                  <div className="flex items-center gap-1.5 mt-3 text-[10px] text-[#9C9388] font-mono">
-                    {fragment.tags.map((t, idx) => (
-                      <span key={t}>
-                        #{t}
-                        {idx < fragment.tags.length - 1 ? ' · ' : ''}
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              ))}
+                ))
+              )}
             </div>
           </div>
         </div>

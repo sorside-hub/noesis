@@ -14,6 +14,7 @@ import {
   Plus,
   Quote,
 } from 'lucide-react';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
 
 export const FragmentDrawer: React.FC = () => {
   const {
@@ -39,6 +40,7 @@ export const FragmentDrawer: React.FC = () => {
   const [tagInput, setTagInput] = useState('');
   const [isCopied, setIsCopied] = useState(false);
   const [isSavedNotice, setIsSavedNotice] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   useEffect(() => {
     if (activeFragment) {
@@ -234,7 +236,7 @@ export const FragmentDrawer: React.FC = () => {
               {/* Delete Fragment */}
               <button
                 type="button"
-                onClick={() => deleteFragment(activeFragment.id)}
+                onClick={() => setShowDeleteConfirm(true)}
                 className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
                 title="Delete Fragment"
               >
@@ -399,7 +401,7 @@ export const FragmentDrawer: React.FC = () => {
                 </>
               ) : (
                 <>
-                  <Plus size={14} />
+                  <Feather size={14} />
                   <span>Capture</span>
                 </>
               )}
@@ -421,6 +423,20 @@ export const FragmentDrawer: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={() => {
+          if (activeFragment) {
+            deleteFragment(activeFragment.id);
+            setShowDeleteConfirm(false);
+            closeFragmentDrawer();
+          }
+        }}
+        itemType="fragment"
+      />
     </div>
   );
 };

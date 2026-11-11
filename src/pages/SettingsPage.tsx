@@ -8,15 +8,80 @@ import {
   BookOpen,
   Sliders,
   ShieldCheck,
+  Database,
+  Copy,
+  Code2,
+  Sparkles,
 } from 'lucide-react';
 import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
+import { SUPABASE_SQL_SCRIPT } from '../data/supabaseSchema';
+import { getSupabaseUrl, getSupabaseAnonKey } from '../lib/supabase';
+import { getCloudflareAccountId, getCloudflareApiToken } from '../lib/cloudflareEmbedding';
 
 export const SettingsPage: React.FC = () => {
-  const { notes, relics } = useNoesis();
+  const {
+    notes,
+    relics,
+    isSupabaseConnected,
+    isCloudflareConnected,
+    syncStatus,
+    syncAllToSupabase,
+  } = useNoesis();
   const [copiedExport, setCopiedExport] = useState(false);
+  const [copiedSql, setCopiedSql] = useState(false);
   const [resetNotice, setResetNotice] = useState(false);
   const [fontSize, setFontSize] = useState<'standard' | 'generous' | 'large'>('standard');
   const [showWordCount, setShowWordCount] = useState(true);
+  const [isSyncingAll, setIsSyncingAll] = useState(false);
+  const [syncResult, setSyncResult] = useState<string | null>(null);
+
+  // API Credentials Input State
+  const [showCredentialsForm, setShowCredentialsForm] = useState(false);
+  const [sbUrlInput, setSbUrlInput] = useState(getSupabaseUrl());
+  const [sbKeyInput, setSbKeyInput] = useState(getSupabaseAnonKey());
+  const [cfAccountInput, setCfAccountInput] = useState(getCloudflareAccountId());
+  const [cfTokenInput, setCfTokenInput] = useState(getCloudflareApiToken());
+  const [savedNotice, setSavedNotice] = useState<string | null>(null);
+
+  const handleSaveCredentials = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (sbUrlInput.trim()) localStorage.setItem('noesis_supabase_url', sbUrlInput.trim());
+    else localStorage.removeItem('noesis_supabase_url');
+
+    if (sbKeyInput.trim()) localStorage.setItem('noesis_supabase_anon_key', sbKeyInput.trim());
+    else localStorage.removeItem('noesis_supabase_anon_key');
+
+    if (cfAccountInput.trim()) localStorage.setItem('noesis_cf_account_id', cfAccountInput.trim());
+    else localStorage.removeItem('noesis_cf_account_id');
+
+    if (cfTokenInput.trim()) localStorage.setItem('noesis_cf_api_token', cfTokenInput.trim());
+    else localStorage.removeItem('noesis_cf_api_token');
+
+    setSavedNotice('Kredensial tersimpan! Memuat ulang koneksi...');
+    setTimeout(() => {
+      window.location.reload();
+    }, 600);
+  };
+
+  const handleCopySQL = () => {
+    navigator.clipboard?.writeText(SUPABASE_SQL_SCRIPT);
+    setCopiedSql(true);
+    setTimeout(() => setCopiedSql(false), 2200);
+  };
+
+  const handleSyncAll = async () => {
+    setIsSyncingAll(true);
+    setSyncResult(null);
+    const res = await syncAllToSupabase();
+    setIsSyncingAll(false);
+    if (res.success) {
+      setSyncResult(`Tersinkron ${res.notesCount} notes & ${res.fragmentsCount} fragments ke Supabase!`);
+      setTimeout(() => setSyncResult(null), 4000);
+    } else {
+      setSyncResult('Supabase belum aktif di .env. Jalankan SQL terlebih dahulu lalu masukkan kredensial.');
+      setTimeout(() => setSyncResult(null), 5000);
+    }
+  };
 
   const handleExportJSON = () => {
     const data = {
@@ -119,6 +184,224 @@ export const SettingsPage: React.FC = () => {
                 }`}
               />
             </button>
+          </div>
+        </div>
+
+        {/* Supabase & Cloudflare BGE-M3 Schema Setup */}
+        <div className="p-6 sm:p-7 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-5">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center shrink-0">
+                <Database size={18} />
+              </div>
+              <div>
+                <h2 className="font-serif text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Supabase & pgvector SQL Schema
+                </h2>
+                <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5">
+                  Optimized for Cloudflare Workers AI <span className="font-mono text-[#9A3412] dark:text-[#EA580C]">bge-m3</span> (1024 dimensions)
+                </p>
+              </div>
+            </div>
+
+            <button
+              onClick={handleCopySQL}
+              className={`px-4 py-2 rounded-xl text-xs font-medium transition-all shadow-xs flex items-center gap-2 shrink-0 ${
+                copiedSql
+                  ? 'bg-emerald-600 text-white'
+                  : 'bg-[#9A3412] dark:bg-[#EA580C] text-white hover:bg-[#78280E] dark:hover:bg-[#C2410C]'
+              }`}
+            >
+              {copiedSql ? (
+                <>
+                  <Check size={14} />
+                  <span>SQL Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Copy size={14} />
+                  <span>Copy SQL Script</span>
+                </>
+              )}
+            </button>
+          </div>
+
+          {/* Live Connection Status & Sync Action */}
+          <div className="p-4 rounded-xl bg-[#F5EFEB]/70 dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="space-y-1.5 text-xs">
+              <div className="flex items-center gap-2">
+                <span className="text-[#6B635B] dark:text-[#A8A196]">Supabase Database:</span>
+                <span
+                  className={`inline-flex items-center gap-1.5 font-medium px-2 py-0.5 rounded-md text-[11px] ${
+                    isSupabaseConnected
+                      ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-amber-100 dark:bg-amber-950/40 text-amber-800 dark:text-amber-400'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isSupabaseConnected ? 'bg-emerald-500' : 'bg-amber-500'
+                    }`}
+                  />
+                  {isSupabaseConnected ? 'Connected (Realtime Active)' : 'Local Offline Mode'}
+                </span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[#6B635B] dark:text-[#A8A196]">Cloudflare Workers AI:</span>
+                <span
+                  className={`inline-flex items-center gap-1.5 font-medium px-2 py-0.5 rounded-md text-[11px] ${
+                    isCloudflareConnected
+                      ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                      : 'bg-stone-200 dark:bg-stone-800 text-[#6B635B] dark:text-[#A8A196]'
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isCloudflareConnected ? 'bg-emerald-500' : 'bg-stone-400'
+                    }`}
+                  />
+                  {isCloudflareConnected ? 'bge-m3 Active (1024 Dim)' : 'Awaiting CF credentials'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowCredentialsForm((prev) => !prev)}
+                className="px-3.5 py-1.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] transition-colors flex items-center gap-1.5"
+              >
+                <Sliders size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                <span>{showCredentialsForm ? 'Sembunyikan Form Kredensial' : 'Atur Kredensial API'}</span>
+              </button>
+
+              {isSupabaseConnected && (
+                <button
+                  type="button"
+                  onClick={handleSyncAll}
+                  disabled={isSyncingAll}
+                  className="px-3.5 py-1.5 rounded-xl border border-[#9A3412] dark:border-[#EA580C] text-[#9A3412] dark:text-[#EA580C] hover:bg-[#9A3412]/10 text-xs font-medium transition-colors flex items-center gap-1.5"
+                >
+                  <Database size={13} />
+                  <span>{isSyncingAll ? 'Syncing...' : 'Sync Local to Supabase'}</span>
+                </button>
+              )}
+            </div>
+          </div>
+
+          {/* Collapsible API Credentials Form */}
+          {showCredentialsForm && (
+            <form onSubmit={handleSaveCredentials} className="p-4 sm:p-5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] space-y-4 animate-in fade-in duration-150">
+              <div className="border-b border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 pb-3">
+                <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Pengaturan Kredensial Supabase & Cloudflare AI
+                </h3>
+                <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5">
+                  Masukkan kredensial di bawah ini untuk menghubungkan database Supabase dan Cloudflare Workers AI (<code className="font-mono text-[#9A3412]">bge-m3</code>).
+                </p>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                {/* Supabase URL */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1">
+                    Supabase Project URL
+                  </label>
+                  <input
+                    type="url"
+                    value={sbUrlInput}
+                    onChange={(e) => setSbUrlInput(e.target.value)}
+                    placeholder="https://xyzcompany.supabase.co"
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                  />
+                </div>
+
+                {/* Supabase Anon Key */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1">
+                    Supabase Anon Key
+                  </label>
+                  <input
+                    type="password"
+                    value={sbKeyInput}
+                    onChange={(e) => setSbKeyInput(e.target.value)}
+                    placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6..."
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                  />
+                </div>
+
+                {/* Cloudflare Account ID */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1">
+                    Cloudflare Account ID
+                  </label>
+                  <input
+                    type="text"
+                    value={cfAccountInput}
+                    onChange={(e) => setCfAccountInput(e.target.value)}
+                    placeholder="Salin dari dashboard Cloudflare..."
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                  />
+                </div>
+
+                {/* Cloudflare API Token */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1">
+                    Cloudflare API Token (Workers AI)
+                  </label>
+                  <input
+                    type="password"
+                    value={cfTokenInput}
+                    onChange={(e) => setCfTokenInput(e.target.value)}
+                    placeholder="Token dengan izin Workers AI Read/Run..."
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                  />
+                </div>
+              </div>
+
+              {savedNotice && (
+                <p className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
+                  {savedNotice}
+                </p>
+              )}
+
+              <div className="flex items-center justify-end gap-2 pt-2 border-t border-[#E8E2D8]/60 dark:border-[#2F2B28]/60">
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] transition-colors shadow-xs"
+                >
+                  Simpan Kredensial
+                </button>
+              </div>
+            </form>
+          )}
+
+          {/* Feature Badges */}
+          <div className="flex flex-wrap items-center gap-1.5 text-[11px] font-mono">
+            <span className="px-2.5 py-1 rounded-lg bg-[#F5EFEB] dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] border border-[#E8E2D8] dark:border-[#2F2B28]">
+              vector(1024)
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-[#F5EFEB] dark:bg-[#272422] text-[#6B635B] dark:text-[#A8A196] border border-[#E8E2D8] dark:border-[#2F2B28]">
+              Supabase Realtime Pub/Sub
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-[#F5EFEB] dark:bg-[#272422] text-[#6B635B] dark:text-[#A8A196] border border-[#E8E2D8] dark:border-[#2F2B28]">
+              Idempotent (Safe Re-run)
+            </span>
+            <span className="px-2.5 py-1 rounded-lg bg-[#F5EFEB] dark:bg-[#272422] text-[#6B635B] dark:text-[#A8A196] border border-[#E8E2D8] dark:border-[#2F2B28]">
+              HNSW Cosine Index
+            </span>
+          </div>
+
+          <p className="text-xs text-[#6B635B] dark:text-[#A8A196] leading-relaxed">
+            Salin skrip SQL ini lalu jalankan di <strong>Supabase SQL Editor</strong>. Skrip ini aman dijalankan berulang kali (tidak akan menghapus data yang ada) dan otomatis mengaktifkan ekstensi <code className="font-mono text-[#9A3412] dark:text-[#EA580C]">pgvector</code>, tabel <code className="font-mono">notes</code>, <code className="font-mono">fragments</code>, publikasi realtime, dan fungsi pencarian semantik <code className="font-mono">match_notes</code> & <code className="font-mono">match_fragments</code>.
+          </p>
+
+          {/* Monospace Code Preview Box */}
+          <div className="relative rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] p-3.5 max-h-56 overflow-y-auto">
+            <pre className="text-[11px] font-mono leading-relaxed text-[#6B635B] dark:text-[#A8A196] whitespace-pre select-all">
+              {SUPABASE_SQL_SCRIPT}
+            </pre>
           </div>
         </div>
 

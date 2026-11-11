@@ -22,6 +22,7 @@ import {
   ChevronDown,
   Check,
 } from 'lucide-react';
+import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 
 export const LibraryPage: React.FC = () => {
   const {
@@ -44,6 +45,7 @@ export const LibraryPage: React.FC = () => {
   const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
+  const [noteIdToDelete, setNoteIdToDelete] = useState<string | null>(null);
 
   // Extract all unique tags
   const allTags = useMemo(() => {
@@ -503,17 +505,57 @@ export const LibraryPage: React.FC = () => {
 
         {/* Notes Grid or List Layout */}
         {filteredNotes.length === 0 ? (
-          <div className="py-16 text-center border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] rounded-2xl p-8">
-            <BookOpen size={28} className="mx-auto text-[#9C9388] mb-2" />
-            <p className="font-serif italic text-base text-[#6B635B] dark:text-[#A8A196]">
-              No notes found in your library matching this filter.
-            </p>
-            <button
-              onClick={handleCreateNew}
-              className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1"
-            >
-              <Feather size={13} /> Compose a new note
-            </button>
+          <div className="py-20 px-6 text-center border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] rounded-3xl p-8 bg-white/40 dark:bg-[#1E1C1A]/40 flex flex-col items-center justify-center">
+            <div className="w-14 h-14 rounded-2xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mb-3.5">
+              <BookOpen size={24} />
+            </div>
+
+            {notes.length === 0 ? (
+              <>
+                <h3 className="font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Perpustakaan Masih Kosong
+                </h3>
+                <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-1.5 max-w-md leading-relaxed font-normal">
+                  Mulai tuangkan pemikiran, kutipan buku, atau rancangan ide barumu ke dalam perpustakaan pribadi.
+                </p>
+                <button
+                  onClick={handleCreateNew}
+                  className="mt-5 px-5 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-2"
+                >
+                  <Feather size={14} />
+                  <span>Tulis Catatan Pertama</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 className="font-serif text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Tidak Ada Catatan yang Cocok
+                </h3>
+                <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-1 max-w-sm">
+                  Tidak ditemukan catatan dengan filter atau pencarian saat ini.
+                </p>
+                <div className="flex items-center gap-2 mt-4">
+                  <button
+                    onClick={() => {
+                      setSearch('');
+                      setSelectedType('all');
+                      setShowFavoritesOnly(false);
+                      setShowArchivedOnly(false);
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] text-xs font-medium text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] transition-colors"
+                  >
+                    Reset Filter
+                  </button>
+                  <button
+                    onClick={handleCreateNew}
+                    className="px-4 py-1.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] transition-colors flex items-center gap-1.5"
+                  >
+                    <Feather size={13} />
+                    <span>Tulis Baru</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ) : viewLayout === 'grid' ? (
           /* Grid Mode: 2 columns on mobile, 3 columns on tablet/desktop (Identical to CapturePage) */
@@ -590,7 +632,7 @@ export const LibraryPage: React.FC = () => {
                       />
                     </button>
                     <button
-                      onClick={() => deleteNote(note.id)}
+                      onClick={() => setNoteIdToDelete(note.id)}
                       className="p-1 sm:p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                       title="Delete Note"
                     >
@@ -641,7 +683,7 @@ export const LibraryPage: React.FC = () => {
                       <Star size={14} fill={note.favorite ? 'currentColor' : 'none'} />
                     </button>
                     <button
-                      onClick={() => deleteNote(note.id)}
+                      onClick={() => setNoteIdToDelete(note.id)}
                       className="p-1 rounded-lg text-[#9C9388] hover:text-red-600 transition-colors opacity-100 sm:opacity-0 group-hover:opacity-100"
                       title="Delete Note"
                     >
@@ -675,6 +717,19 @@ export const LibraryPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={Boolean(noteIdToDelete)}
+        onClose={() => setNoteIdToDelete(null)}
+        onConfirm={() => {
+          if (noteIdToDelete) {
+            deleteNote(noteIdToDelete);
+            setNoteIdToDelete(null);
+          }
+        }}
+        itemType="note"
+      />
     </div>
   );
 };

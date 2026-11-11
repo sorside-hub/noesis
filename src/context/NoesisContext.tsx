@@ -1,6 +1,21 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
 import { ViewMode, ThemePreference, Note, Notebook, Relic, Fragment, Project, RelicType, FragmentType, NoteType } from '../types';
 import { INITIAL_NOTES, INITIAL_NOTEBOOKS, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
+import {
+  isSupabaseConfigured,
+  fetchNotesFromSupabase,
+  upsertNoteToSupabase,
+  deleteNoteFromSupabase,
+  fetchFragmentsFromSupabase,
+  upsertFragmentToSupabase,
+  deleteFragmentFromSupabase,
+  subscribeToRealtimeChanges,
+} from '../lib/supabase';
+import {
+  isCloudflareAiConfigured,
+  embedAndSyncNote,
+  embedAndSyncFragment,
+} from '../lib/cloudflareEmbedding';
 
 interface NoesisContextType {
   // Theme
@@ -31,6 +46,7 @@ interface NoesisContextType {
   createNote: (notebookId?: string, type?: NoteType) => string;
   updateNote: (id: string, updates: Partial<Note>) => void;
   deleteNote: (id: string) => void;
+  discardNoteIfEmpty: (id: string) => boolean;
   toggleFavoriteNote: (id: string) => void;
   toggleArchiveNote: (id: string) => void;
   linkRelatedNote: (noteId: string, targetNoteId: string) => void;
@@ -59,6 +75,14 @@ interface NoesisContextType {
   // Projects
   projects: Project[];
   toggleProjectMilestone: (projectId: string, milestoneId: string) => void;
+
+  // Supabase & Embedding Integration
+  isSupabaseConnected: boolean;
+  isCloudflareConnected: boolean;
+  syncStatus: 'synced' | 'syncing' | 'offline' | 'error';
+  syncAllToSupabase: () => Promise<{ success: boolean; notesCount: number; fragmentsCount: number }>;
+  manualEmbedNote: (noteId: string) => Promise<boolean>;
+  manualRemoveEmbedNote: (noteId: string) => Promise<boolean>;
 }
 
 const NoesisContext = createContext<NoesisContextType | undefined>(undefined);
@@ -100,7 +124,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Views & Filter state
   const [activeView, setActiveView] = useState<ViewMode>('editor');
   const [activeNotebookId, setActiveNotebookId] = useState<string | null>(null);
-  const [activeNoteId, setActiveNoteId] = useState<string>('note-1');
+  const [activeNoteId, setActiveNoteId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
@@ -109,23 +133,42 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [activeFragmentId, setActiveFragmentId] = useState<string | null>(null);
   const [isFragmentDrawerOpen, setIsFragmentDrawerOpen] = useState<boolean>(false);
 
-  // Entities state with localStorage caching and migration
+  // Migration: clear out previously cached sample notes and fragments so user starts completely clean
+  useEffect(() => {
+    const hasCleanedSamples = localStorage.getItem('noesis_clean_empty_v2');
+    if (!hasCleanedSamples) {
+      localStorage.removeItem('noesis_notes');
+      localStorage.removeItem('noesis_fragments');
+      localStorage.removeItem('noesis_relics');
+      localStorage.setItem('noesis_clean_empty_v2', 'true');
+    }
+  }, []);
+
+  // Entities state with localStorage caching (Offline-First)
   const [notes, setNotes] = useState<Note[]>(() => {
+    if (!localStorage.getItem('noesis_clean_empty_v2')) {
+      return [];
+    }
     const saved = localStorage.getItem('noesis_notes');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        // Ensure every note has type and relatedNoteIds
-        return parsed.map((n: any) => ({
-          ...n,
-          type: n.type || 'thought',
-          relatedNoteIds: Array.isArray(n.relatedNoteIds) ? n.relatedNoteIds : [],
-        }));
+        return Array.isArray(parsed)
+          ? parsed.filter((n: any) => {
+              const hasTitle = Boolean(n.title && n.title.trim().length > 0);
+              const plainContent = (n.content || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+              return hasTitle || plainContent.length > 0;
+            }).map((n: any) => ({
+              ...n,
+              type: n.type || 'thought',
+              relatedNoteIds: Array.isArray(n.relatedNoteIds) ? n.relatedNoteIds : [],
+            }))
+          : [];
       } catch {
-        return INITIAL_NOTES;
+        return [];
       }
     }
-    return INITIAL_NOTES;
+    return [];
   });
 
   const [notebooks, setNotebooks] = useState<Notebook[]>(() => {
@@ -141,27 +184,24 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   });
 
   const [fragments, setFragments] = useState<Fragment[]>(() => {
+    if (!localStorage.getItem('noesis_clean_empty_v2')) {
+      return [];
+    }
     const saved = localStorage.getItem('noesis_fragments') || localStorage.getItem('noesis_relics');
     if (saved) {
       try {
         const parsed = JSON.parse(saved);
-        return parsed.map((f: any) => {
-          let type: FragmentType = 'thought';
-          if (f.type === 'thought' || f.type === 'reference' || f.type === 'idea') {
-            type = f.type;
-          } else if (f.type === 'quote' || f.type === 'object') {
-            type = 'reference';
-          }
-          return {
-            ...f,
-            type,
-          };
-        });
+        return Array.isArray(parsed)
+          ? parsed.map((f: any) => ({
+              ...f,
+              type: (f.type === 'thought' || f.type === 'reference' || f.type === 'idea') ? f.type : 'thought',
+            }))
+          : [];
       } catch {
-        return INITIAL_FRAGMENTS;
+        return [];
       }
     }
-    return INITIAL_FRAGMENTS;
+    return [];
   });
 
   const relics = fragments; // alias
@@ -178,7 +218,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return INITIAL_PROJECTS;
   });
 
-  // Save changes locally
+  // Save changes locally (Offline-First storage)
   useEffect(() => {
     localStorage.setItem('noesis_notes', JSON.stringify(notes));
   }, [notes]);
@@ -192,9 +232,86 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     localStorage.setItem('noesis_relics', JSON.stringify(fragments));
   }, [fragments]);
 
+  // Supabase & Cloudflare AI status
+  const isSupabaseConnected = isSupabaseConfigured();
+  const isCloudflareConnected = isCloudflareAiConfigured();
+  const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>(() => {
+    return isSupabaseConfigured() ? 'syncing' : 'offline';
+  });
+  const embedTimersRef = useRef<Record<string, any>>({});
+
+  // Multi-Device Synchronization: Supabase as authoritative source of truth
   useEffect(() => {
-    localStorage.setItem('noesis_projects', JSON.stringify(projects));
-  }, [projects]);
+    if (!isSupabaseConfigured()) {
+      setSyncStatus('offline');
+      return;
+    }
+
+    let isMounted = true;
+    setSyncStatus('syncing');
+
+    const initSupabase = async () => {
+      try {
+        const [dbNotes, dbFragments] = await Promise.all([
+          fetchNotesFromSupabase(),
+          fetchFragmentsFromSupabase(),
+        ]);
+
+        if (!isMounted) return;
+
+        // When Supabase responds with data, it is authoritative across all devices
+        if (dbNotes !== null) {
+          setNotes(dbNotes);
+          localStorage.setItem('noesis_notes', JSON.stringify(dbNotes));
+          if (dbNotes.length > 0) {
+            setActiveNoteId((prev) => (dbNotes.some((n) => n.id === prev) ? prev : dbNotes[0].id));
+          } else {
+            setActiveNoteId('');
+          }
+        }
+
+        if (dbFragments !== null) {
+          setFragments(dbFragments);
+          localStorage.setItem('noesis_fragments', JSON.stringify(dbFragments));
+        }
+
+        setSyncStatus('synced');
+      } catch (err) {
+        console.warn('Initial Supabase fetch error:', err);
+        if (isMounted) setSyncStatus('offline');
+      }
+    };
+
+    initSupabase();
+
+    // Subscribe to realtime database changes from other devices/tabs
+    const unsubscribe = subscribeToRealtimeChanges(
+      async () => {
+        const latestNotes = await fetchNotesFromSupabase();
+        if (latestNotes !== null && isMounted) {
+          setNotes(latestNotes);
+          localStorage.setItem('noesis_notes', JSON.stringify(latestNotes));
+          if (latestNotes.length > 0) {
+            setActiveNoteId((prev) => (latestNotes.some((n) => n.id === prev) ? prev : latestNotes[0].id));
+          } else {
+            setActiveNoteId('');
+          }
+        }
+      },
+      async () => {
+        const latestFragments = await fetchFragmentsFromSupabase();
+        if (latestFragments !== null && isMounted) {
+          setFragments(latestFragments);
+          localStorage.setItem('noesis_fragments', JSON.stringify(latestFragments));
+        }
+      }
+    );
+
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
+  }, []);
 
   const activeNote = useMemo(() => {
     return notes.find((n) => n.id === activeNoteId) || notes[0];
@@ -230,13 +347,38 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       prev.map((nb) => (nb.id === targetNotebook ? { ...nb, count: nb.count + 1 } : nb))
     );
 
+    if (isSupabaseConfigured()) {
+      upsertNoteToSupabase(newNote).catch(console.warn);
+    }
+
     return newNote.id;
   };
 
   const updateNote = (id: string, updates: Partial<Note>) => {
+    const updatedAt = new Date().toISOString();
+    let updatedObj: Note | undefined;
+
     setNotes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, ...updates, updatedAt: new Date().toISOString() } : n))
+      prev.map((n) => {
+        if (n.id === id) {
+          const updated = { ...n, ...updates, updatedAt };
+          updatedObj = updated;
+          return updated;
+        }
+        return n;
+      })
     );
+
+    if (isSupabaseConfigured() && updatedObj) {
+      if (embedTimersRef.current[id]) {
+        clearTimeout(embedTimersRef.current[id]);
+      }
+      embedTimersRef.current[id] = setTimeout(() => {
+        if (updatedObj) {
+          embedAndSyncNote(updatedObj).catch(console.warn);
+        }
+      }, 1500);
+    }
   };
 
   const linkRelatedNote = (noteId: string, targetNoteId: string) => {
@@ -244,10 +386,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === noteId && !n.relatedNoteIds.includes(targetNoteId)) {
-          return { ...n, relatedNoteIds: [...n.relatedNoteIds, targetNoteId] };
+          const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, targetNoteId] };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          return updated;
         }
         if (n.id === targetNoteId && !n.relatedNoteIds.includes(noteId)) {
-          return { ...n, relatedNoteIds: [...n.relatedNoteIds, noteId] };
+          const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, noteId] };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          return updated;
         }
         return n;
       })
@@ -258,14 +404,46 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === noteId) {
-          return { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== targetNoteId) };
+          const updated = { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== targetNoteId) };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          return updated;
         }
         if (n.id === targetNoteId) {
-          return { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== noteId) };
+          const updated = { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== noteId) };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          return updated;
         }
         return n;
       })
     );
+  };
+
+  const isNoteEffectivelyEmpty = (note: Note): boolean => {
+    const hasTitle = Boolean(note.title && note.title.trim().length > 0);
+    // Strip HTML tags and whitespace
+    const plainText = (note.content || '').replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ').trim();
+    return !hasTitle && plainText.length === 0;
+  };
+
+  const discardNoteIfEmpty = (id: string): boolean => {
+    const target = notes.find((n) => n.id === id);
+    if (!target) return false;
+    if (isNoteEffectivelyEmpty(target)) {
+      const remaining = notes.filter((n) => n.id !== id);
+      setNotes(remaining);
+      if (activeNoteId === id && remaining.length > 0) {
+        setActiveNoteId(remaining[0].id);
+      }
+      setNotebooks((prev) =>
+        prev.map((nb) => (nb.id === target.notebookId ? { ...nb, count: Math.max(0, nb.count - 1) } : nb))
+      );
+
+      if (isSupabaseConfigured()) {
+        deleteNoteFromSupabase(id).catch(console.warn);
+      }
+      return true;
+    }
+    return false;
   };
 
   const deleteNote = (id: string) => {
@@ -280,17 +458,35 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         prev.map((nb) => (nb.id === target.notebookId ? { ...nb, count: Math.max(0, nb.count - 1) } : nb))
       );
     }
+
+    if (isSupabaseConfigured()) {
+      deleteNoteFromSupabase(id).catch(console.warn);
+    }
   };
 
   const toggleFavoriteNote = (id: string) => {
     setNotes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, favorite: !n.favorite } : n))
+      prev.map((n) => {
+        if (n.id === id) {
+          const updated = { ...n, favorite: !n.favorite };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          return updated;
+        }
+        return n;
+      })
     );
   };
 
   const toggleArchiveNote = (id: string) => {
     setNotes((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, archived: !n.archived } : n))
+      prev.map((n) => {
+        if (n.id === id) {
+          const updated = { ...n, archived: !n.archived };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          return updated;
+        }
+        return n;
+      })
     );
   };
 
@@ -336,13 +532,37 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       starred: false,
     };
     setFragments((prev) => [newFragment, ...prev]);
+
+    if (isSupabaseConfigured()) {
+      embedAndSyncFragment(newFragment).catch(console.warn);
+    }
+
     return id;
   };
 
   const updateFragment = (id: string, updates: Partial<Fragment>) => {
+    let updatedFragObj: Fragment | undefined;
     setFragments((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, ...updates } : f))
+      prev.map((f) => {
+        if (f.id === id) {
+          const updated = { ...f, ...updates };
+          updatedFragObj = updated;
+          return updated;
+        }
+        return f;
+      })
     );
+
+    if (isSupabaseConfigured() && updatedFragObj) {
+      if (embedTimersRef.current[id]) {
+        clearTimeout(embedTimersRef.current[id]);
+      }
+      embedTimersRef.current[id] = setTimeout(() => {
+        if (updatedFragObj) {
+          embedAndSyncFragment(updatedFragObj).catch(console.warn);
+        }
+      }, 1500);
+    }
   };
 
   const deleteFragment = (id: string) => {
@@ -350,11 +570,21 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (activeFragmentId === id) {
       closeFragmentDrawer();
     }
+    if (isSupabaseConfigured()) {
+      deleteFragmentFromSupabase(id).catch(console.warn);
+    }
   };
 
   const toggleStarFragment = (id: string) => {
     setFragments((prev) =>
-      prev.map((f) => (f.id === id ? { ...f, starred: !f.starred } : f))
+      prev.map((f) => {
+        if (f.id === id) {
+          const updated = { ...f, starred: !f.starred };
+          if (isSupabaseConfigured()) upsertFragmentToSupabase(updated).catch(console.warn);
+          return updated;
+        }
+        return f;
+      })
     );
   };
 
@@ -390,6 +620,46 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     );
   };
 
+  // Push all existing local notes & fragments to Supabase
+  const syncAllToSupabase = async () => {
+    if (!isSupabaseConfigured()) {
+      return { success: false, notesCount: 0, fragmentsCount: 0 };
+    }
+    setSyncStatus('syncing');
+    let notesCount = 0;
+    let fragmentsCount = 0;
+
+    for (const note of notes) {
+      const ok = await embedAndSyncNote(note);
+      if (ok) notesCount++;
+    }
+
+    for (const frag of fragments) {
+      const ok = await embedAndSyncFragment(frag);
+      if (ok) fragmentsCount++;
+    }
+
+    setSyncStatus('synced');
+    return { success: true, notesCount, fragmentsCount };
+  };
+
+  // Manual embed single note
+  const manualEmbedNote = async (noteId: string): Promise<boolean> => {
+    const target = notes.find((n) => n.id === noteId);
+    if (!target) return false;
+    return await embedAndSyncNote(target);
+  };
+
+  // Manual remove embed for note
+  const manualRemoveEmbedNote = async (noteId: string): Promise<boolean> => {
+    const target = notes.find((n) => n.id === noteId);
+    if (!target) return false;
+    if (isSupabaseConfigured()) {
+      return await upsertNoteToSupabase(target, null);
+    }
+    return true;
+  };
+
   return (
     <NoesisContext.Provider
       value={{
@@ -421,6 +691,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         createNote,
         updateNote,
         deleteNote,
+        discardNoteIfEmpty,
         toggleFavoriteNote,
         toggleArchiveNote,
         linkRelatedNote,
@@ -438,6 +709,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleStarRelic,
         projects,
         toggleProjectMilestone,
+        isSupabaseConnected,
+        isCloudflareConnected,
+        syncStatus,
+        syncAllToSupabase,
+        manualEmbedNote,
+        manualRemoveEmbedNote,
       }}
     >
       {children}

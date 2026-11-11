@@ -14,6 +14,7 @@ import {
   ChevronDown,
   Check,
 } from 'lucide-react';
+import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 
 export const FragmentsPage: React.FC = () => {
   const {
@@ -30,6 +31,7 @@ export const FragmentsPage: React.FC = () => {
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
+  const [fragmentIdToDelete, setFragmentIdToDelete] = useState<string | null>(null);
 
   const categories = [
     { id: 'all', label: 'All' },
@@ -419,17 +421,56 @@ export const FragmentsPage: React.FC = () => {
 
         {/* Fragments Cards Showcase */}
         {filteredFragments.length === 0 ? (
-          <div className="py-16 text-center border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] rounded-2xl p-8">
-            <Feather size={28} className="mx-auto text-[#9C9388] mb-2" />
-            <p className="font-serif italic text-base text-[#6B635B] dark:text-[#A8A196]">
-              No fragments found matching this query.
-            </p>
-            <button
-              onClick={() => openFragmentDrawer(null)}
-              className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1"
-            >
-              <Feather size={13} /> Capture a new fragment
-            </button>
+          <div className="py-20 px-6 text-center border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] rounded-3xl p-8 bg-white/40 dark:bg-[#1E1C1A]/40 flex flex-col items-center justify-center">
+            <div className="w-14 h-14 rounded-2xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mb-3.5">
+              <Feather size={24} />
+            </div>
+
+            {fragments.length === 0 ? (
+              <>
+                <h3 className="font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Belum Ada Fragment Tersimpan
+                </h3>
+                <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-1.5 max-w-md leading-relaxed font-normal">
+                  Tangkap kutipan buku, pengamatan singkat, atau inspirasi kilat dalam sekejap kapan saja.
+                </p>
+                <button
+                  onClick={() => openFragmentDrawer(null)}
+                  className="mt-5 px-5 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-2"
+                >
+                  <Feather size={14} />
+                  <span>Capture Fragment Pertama</span>
+                </button>
+              </>
+            ) : (
+              <>
+                <h3 className="font-serif text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                  Tidak Ada Fragment yang Cocok
+                </h3>
+                <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-1 max-w-sm">
+                  Tidak ditemukan fragment dengan filter atau pencarian saat ini.
+                </p>
+                <div className="flex items-center gap-2 mt-4">
+                  <button
+                    onClick={() => {
+                      setSearch('');
+                      setSelectedType('all');
+                      setShowFavoritesOnly(false);
+                    }}
+                    className="px-3.5 py-1.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] text-xs font-medium text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] transition-colors"
+                  >
+                    Reset Filter
+                  </button>
+                  <button
+                    onClick={() => openFragmentDrawer(null)}
+                    className="px-4 py-1.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] transition-colors flex items-center gap-1.5"
+                  >
+                    <Feather size={13} />
+                    <span>Capture Baru</span>
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         ) : viewMode === 'grid' ? (
           /* Grid Mode: 2 columns on mobile, 3 columns on tablet/desktop */
@@ -491,7 +532,7 @@ export const FragmentsPage: React.FC = () => {
                       <Star size={13} className="sm:w-3.5 sm:h-3.5" fill={fragment.starred ? 'currentColor' : 'none'} />
                     </button>
                     <button
-                      onClick={() => deleteFragment(fragment.id)}
+                      onClick={() => setFragmentIdToDelete(fragment.id)}
                       className="p-1 sm:p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 transition-colors opacity-100 sm:opacity-0 sm:group-hover:opacity-100"
                       title="Delete Fragment"
                     >
@@ -542,7 +583,7 @@ export const FragmentsPage: React.FC = () => {
                       <Star size={14} fill={fragment.starred ? 'currentColor' : 'none'} />
                     </button>
                     <button
-                      onClick={() => deleteFragment(fragment.id)}
+                      onClick={() => setFragmentIdToDelete(fragment.id)}
                       className="p-1 rounded-lg text-[#9C9388] hover:text-red-600 transition-colors opacity-100 sm:opacity-0 group-hover:opacity-100"
                       title="Delete Fragment"
                     >
@@ -576,6 +617,19 @@ export const FragmentsPage: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={Boolean(fragmentIdToDelete)}
+        onClose={() => setFragmentIdToDelete(null)}
+        onConfirm={() => {
+          if (fragmentIdToDelete) {
+            deleteFragment(fragmentIdToDelete);
+            setFragmentIdToDelete(null);
+          }
+        }}
+        itemType="fragment"
+      />
     </div>
   );
 };

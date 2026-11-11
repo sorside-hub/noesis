@@ -33,7 +33,11 @@ import {
   BarChart2,
   Clock,
   FileText,
+  Sparkles,
+  Database,
+  Feather,
 } from 'lucide-react';
+import { DeleteConfirmModal } from './DeleteConfirmModal';
 
 interface TiptapEditorProps {
   isFullScreen?: boolean;
@@ -45,6 +49,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     activeNote,
     updateNote,
     deleteNote,
+    discardNoteIfEmpty,
     toggleFavoriteNote,
     toggleArchiveNote,
     linkRelatedNote,
@@ -52,9 +57,30 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     notes,
     setActiveNoteId,
     setActiveView,
+    createNote,
+    manualEmbedNote,
+    manualRemoveEmbedNote,
+    isCloudflareConnected,
+    isSupabaseConnected,
   } = useNoesis();
 
   const [title, setTitle] = useState(activeNote?.title || '');
+  const [isEmbeddingLoading, setIsEmbeddingLoading] = useState(false);
+  const [embedNotice, setEmbedNotice] = useState<string | null>(null);
+  const activeNoteIdRef = React.useRef(activeNote?.id);
+
+  useEffect(() => {
+    activeNoteIdRef.current = activeNote?.id;
+  }, [activeNote?.id]);
+
+  // When switching notes or leaving the editor, if previous note was empty, discard it automatically
+  useEffect(() => {
+    return () => {
+      if (activeNoteIdRef.current) {
+        discardNoteIfEmpty(activeNoteIdRef.current);
+      }
+    };
+  }, []);
   const [showLinkDialog, setShowLinkDialog] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [showImageDialog, setShowImageDialog] = useState(false);
@@ -63,6 +89,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [showInspector, setShowInspector] = useState(false);
   const [showMobileInspector, setShowMobileInspector] = useState(false);
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   // Inspector states
   const [newTagInput, setNewTagInput] = useState('');
@@ -130,6 +157,33 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     if (activeNote) {
       updateNote(activeNote.id, { title: newTitle });
     }
+  };
+
+  const handleTriggerEmbed = async () => {
+    if (!activeNote) return;
+    setIsEmbeddingLoading(true);
+    setEmbedNotice(null);
+    const ok = await manualEmbedNote(activeNote.id);
+    setIsEmbeddingLoading(false);
+    if (ok) {
+      setEmbedNotice('Embedding bge-m3 tersimpan!');
+    } else {
+      setEmbedNotice(
+        isCloudflareConnected
+          ? 'Gagal generate embedding'
+          : 'Konfigurasi Cloudflare AI diperlukan di .env'
+      );
+    }
+    setTimeout(() => setEmbedNotice(null), 3500);
+  };
+
+  const handleRemoveEmbed = async () => {
+    if (!activeNote) return;
+    setIsEmbeddingLoading(true);
+    await manualRemoveEmbedNote(activeNote.id);
+    setIsEmbeddingLoading(false);
+    setEmbedNotice('Embedding vektor dihapus');
+    setTimeout(() => setEmbedNotice(null), 3000);
   };
 
   const handleSetLink = useCallback(() => {
@@ -228,15 +282,27 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
 
   if (!activeNote || !editor) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center p-8 text-[#9C9388]">
-        <p className="font-serif italic text-lg text-[#221F1D] dark:text-[#EDE8E1]">
-          No note selected
+      <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#FAF7F2] dark:bg-[#151413]">
+        <div className="w-14 h-14 rounded-2xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mb-4 shadow-2xs">
+          <Feather size={24} />
+        </div>
+        <h3 className="font-serif text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-1.5">
+          {notes.length === 0 ? 'Belum Ada Catatan' : 'Pilih Catatan untuk Diedit'}
+        </h3>
+        <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] max-w-sm mb-6 leading-relaxed font-normal">
+          {notes.length === 0
+            ? 'Mulai tuangkan pemikiran, ide, atau kutipan pertamamu ke dalam catatan baru.'
+            : 'Pilih salah satu catatan dari daftar atau buat catatan baru untuk mulai menulis.'}
         </p>
         <button
-          onClick={() => setActiveView('library')}
-          className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline"
+          onClick={() => {
+            const newId = createNote();
+            setActiveNoteId(newId);
+          }}
+          className="px-5 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-2"
         >
-          Return to Library
+          <Feather size={14} />
+          <span>Tulis Catatan Baru</span>
         </button>
       </div>
     );
@@ -269,7 +335,12 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           {/* Left: Library Back Navigation & Note Type */}
           <div className="flex items-center gap-2 text-xs truncate">
             <button
-              onClick={() => setActiveView('library')}
+              onClick={() => {
+                if (activeNote) {
+                  discardNoteIfEmpty(activeNote.id);
+                }
+                setActiveView('library');
+              }}
               className="flex items-center gap-1 font-medium text-[#9A3412] dark:text-[#EA580C] hover:underline"
               title="Return to Library"
             >
@@ -342,9 +413,8 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
 
                   <button
                     onClick={() => {
-                      deleteNote(activeNote.id);
                       setShowActionMenu(false);
-                      setActiveView('library');
+                      setShowDeleteModal(true);
                     }}
                     className="w-full px-3 py-1.5 text-xs flex items-center gap-2 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30 text-left transition-colors border-t border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 mt-1"
                   >
@@ -835,6 +905,45 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 <span className="tabular-nums font-medium">{readingTimeMin} min</span>
               </div>
             </div>
+
+            {/* 6. Semantic Embedding (bge-m3) */}
+            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
+                  <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
+                  <span>Embedding (bge-m3)</span>
+                </label>
+                <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTriggerEmbed}
+                  disabled={isEmbeddingLoading}
+                  className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                  <span>{isEmbeddingLoading ? 'Embedding...' : 'Embed Note'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleRemoveEmbed}
+                  disabled={isEmbeddingLoading}
+                  className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                  title="Hapus vector embedding"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+
+              {embedNotice && (
+                <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                  {embedNotice}
+                </p>
+              )}
+            </div>
           </div>
         </aside>
       )}
@@ -959,6 +1068,45 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               <span>{readingTimeMin} min read</span>
             </div>
 
+            {/* 6. Semantic Embedding (bge-m3) */}
+            <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
+                  <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
+                  <span>Embedding (bge-m3)</span>
+                </label>
+                <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
+              </div>
+
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={handleTriggerEmbed}
+                  disabled={isEmbeddingLoading}
+                  className="flex-1 py-2 px-3 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                  <span>{isEmbeddingLoading ? 'Embedding...' : 'Embed Note'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleRemoveEmbed}
+                  disabled={isEmbeddingLoading}
+                  className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                  title="Hapus vector embedding"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </div>
+
+              {embedNotice && (
+                <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                  {embedNotice}
+                </p>
+              )}
+            </div>
+
             <button
               onClick={() => setShowMobileInspector(false)}
               className="w-full py-2.5 bg-[#9A3412] text-white rounded-xl text-xs font-medium hover:bg-[#78280E]"
@@ -968,6 +1116,20 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           </div>
         </div>
       )}
+
+      {/* Delete Confirmation Modal */}
+      <DeleteConfirmModal
+        isOpen={showDeleteModal}
+        onClose={() => setShowDeleteModal(false)}
+        onConfirm={() => {
+          if (activeNote) {
+            deleteNote(activeNote.id);
+            setShowDeleteModal(false);
+            setActiveView('library');
+          }
+        }}
+        itemType="note"
+      />
     </div>
   );
 };

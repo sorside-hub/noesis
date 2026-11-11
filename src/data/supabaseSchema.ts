@@ -1,0 +1,192 @@
+// Supabase SQL Schema for Noesis Knowledge Base
+// Optimized for Cloudflare Workers AI 'bge-m3' (1024 Dimensions)
+// Completely Idempotent (Safe to execute multiple times without deleting existing data)
+// Fully supports Supabase Realtime & pgvector similarity search
+
+export const SUPABASE_SQL_SCRIPT = `-- ========================================================================
+-- NOESIS KNOWLEDGE BASE - SUPABASE SETUP SCRIPT
+-- Model: Cloudflare Workers AI 'bge-m3' (1024 Dimensions)
+-- Idempotent: Aman dijalankan berulang kali tanpa menghapus data yang ada
+-- Realtime: Mendukung Supabase Realtime pub/sub
+-- ========================================================================
+
+-- 1. AKTIFKAN EKSTENSI VECTOR (pgvector)
+CREATE EXTENSION IF NOT EXISTS vector;
+
+-- 2. TABEL NOTEBOOKS
+CREATE TABLE IF NOT EXISTS public.notebooks (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 3. TABEL NOTES (LIBRARY)
+CREATE TABLE IF NOT EXISTS public.notes (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT DEFAULT '',
+  excerpt TEXT DEFAULT '',
+  type TEXT DEFAULT 'thought' CHECK (type IN ('thought', 'reference', 'idea')),
+  notebook_id TEXT,
+  tags TEXT[] DEFAULT '{}',
+  source TEXT,
+  favorite BOOLEAN DEFAULT false,
+  archived BOOLEAN DEFAULT false,
+  related_note_ids TEXT[] DEFAULT '{}',
+  word_count INTEGER DEFAULT 0,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
+  embedding vector(1024),
+  embedded_at TIMESTAMPTZ
+);
+
+-- 4. TABEL FRAGMENTS
+CREATE TABLE IF NOT EXISTS public.fragments (
+  id TEXT PRIMARY KEY,
+  type TEXT DEFAULT 'thought' CHECK (type IN ('thought', 'reference', 'idea')),
+  title TEXT NOT NULL DEFAULT '',
+  content TEXT DEFAULT '',
+  tags TEXT[] DEFAULT '{}',
+  date TEXT,
+  source TEXT,
+  starred BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
+  embedding vector(1024),
+  embedded_at TIMESTAMPTZ
+);
+
+-- 5. PASTIKAN KOLOM EMBEDDING TERSEDIA JIKA TABEL SUDAH ADA SEBELUMNYA
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedding vector(1024);
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedding vector(1024);
+ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+
+-- 6. AMANKAN DENGAN ROW LEVEL SECURITY (RLS)
+ALTER TABLE public.notebooks ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.fragments ENABLE ROW LEVEL SECURITY;
+
+-- 7. KEBIJAKAN AKSES (RLS POLICIES) - Dibuat hanya jika belum ada
+DO $$
+BEGIN
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to notebooks' AND tablename = 'notebooks') THEN
+    CREATE POLICY "Allow public access to notebooks" ON public.notebooks FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to notes' AND tablename = 'notes') THEN
+    CREATE POLICY "Allow public access to notes" ON public.notes FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to fragments' AND tablename = 'fragments') THEN
+    CREATE POLICY "Allow public access to fragments" ON public.fragments FOR ALL USING (true) WITH CHECK (true);
+  END IF;
+END $$;
+
+-- 8. AKTIFKAN SUPABASE REALTIME SECARA AMAN
+DO $$
+BEGIN
+  ALTER TABLE public.notes REPLICA IDENTITY FULL;
+  ALTER TABLE public.fragments REPLICA IDENTITY FULL;
+  ALTER TABLE public.notebooks REPLICA IDENTITY FULL;
+
+  -- Tambahkan tabel ke publikasi realtime jika belum terdaftar
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'notes'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notes;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'fragments'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.fragments;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'notebooks'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.notebooks;
+  END IF;
+END $$;
+
+-- 9. INDEKS HNSW (High-Performance Vector Indexing untuk 1024 dimensi)
+CREATE INDEX IF NOT EXISTS notes_embedding_hnsw_idx 
+  ON public.notes 
+  USING hnsw (embedding vector_cosine_ops);
+
+CREATE INDEX IF NOT EXISTS fragments_embedding_hnsw_idx 
+  ON public.fragments 
+  USING hnsw (embedding vector_cosine_ops);
+
+-- 10. FUNGSI SEMANTIC MATCHING (RPC) UNTUK PENCARIAN MAKNA (COSINE SIMILARITY)
+CREATE OR REPLACE FUNCTION match_notes (
+  query_embedding vector(1024),
+  match_threshold float DEFAULT 0.45,
+  match_count int DEFAULT 8
+)
+RETURNS TABLE (
+  id TEXT,
+  title TEXT,
+  content TEXT,
+  excerpt TEXT,
+  type TEXT,
+  tags TEXT[],
+  similarity float
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    notes.id,
+    notes.title,
+    notes.content,
+    notes.excerpt,
+    notes.type,
+    notes.tags,
+    (1 - (notes.embedding <=> query_embedding))::float AS similarity
+  FROM public.notes
+  WHERE notes.embedding IS NOT NULL
+    AND 1 - (notes.embedding <=> query_embedding) > match_threshold
+  ORDER BY similarity DESC
+  LIMIT match_count;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION match_fragments (
+  query_embedding vector(1024),
+  match_threshold float DEFAULT 0.45,
+  match_count int DEFAULT 8
+)
+RETURNS TABLE (
+  id TEXT,
+  title TEXT,
+  content TEXT,
+  type TEXT,
+  tags TEXT[],
+  similarity float
+)
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  RETURN QUERY
+  SELECT
+    fragments.id,
+    fragments.title,
+    fragments.content,
+    fragments.type,
+    fragments.tags,
+    (1 - (fragments.embedding <=> query_embedding))::float AS similarity
+  FROM public.fragments
+  WHERE fragments.embedding IS NOT NULL
+    AND 1 - (fragments.embedding <=> query_embedding) > match_threshold
+  ORDER BY similarity DESC
+  LIMIT match_count;
+END;
+$$;
+`;

@@ -1,6 +1,6 @@
 import React from 'react';
 import { useNoesis } from '../context/NoesisContext';
-import { Search, Plus, Star, X } from 'lucide-react';
+import { Search, Feather, Star, X } from 'lucide-react';
 
 export const StreamColumn: React.FC = () => {
   const {
@@ -13,6 +13,7 @@ export const StreamColumn: React.FC = () => {
     setSearchQuery,
     createNote,
     setActiveView,
+    discardNoteIfEmpty,
   } = useNoesis();
 
   // Filter notes based on active notebook stream & search query
@@ -78,6 +79,9 @@ export const StreamColumn: React.FC = () => {
 
         <button
           onClick={() => {
+            if (activeNoteId) {
+              discardNoteIfEmpty(activeNoteId);
+            }
             const newId = createNote();
             setActiveNoteId(newId);
             setActiveView('editor');
@@ -85,7 +89,7 @@ export const StreamColumn: React.FC = () => {
           title="Compose New Note"
           className="p-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#9A3412] dark:text-[#EA580C] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] transition-colors shadow-xs"
         >
-          <Plus size={16} />
+          <Feather size={16} />
         </button>
       </div>
 
@@ -119,10 +123,15 @@ export const StreamColumn: React.FC = () => {
               No notes match your filter.
             </p>
             <button
-              onClick={() => createNote()}
+              onClick={() => {
+                if (activeNoteId) {
+                  discardNoteIfEmpty(activeNoteId);
+                }
+                createNote();
+              }}
               className="mt-3 text-xs text-[#9A3412] dark:text-[#EA580C] font-medium hover:underline inline-flex items-center gap-1"
             >
-              <Plus size={12} /> Create a new note
+              <Feather size={12} /> Create a new note
             </button>
           </div>
         ) : (
@@ -133,6 +142,9 @@ export const StreamColumn: React.FC = () => {
               <div
                 key={note.id}
                 onClick={() => {
+                  if (activeNoteId && activeNoteId !== note.id) {
+                    discardNoteIfEmpty(activeNoteId);
+                  }
                   setActiveNoteId(note.id);
                   setActiveView('editor');
                 }}
