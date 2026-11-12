@@ -10,11 +10,13 @@ import {
   upsertFragmentToSupabase,
   deleteFragmentFromSupabase,
   subscribeToRealtimeChanges,
+  searchNotesSemantic,
 } from '../lib/supabase';
 import {
   isCloudflareAiConfigured,
   embedAndSyncNote,
   embedAndSyncFragment,
+  generateBgeM3Embedding,
 } from '../lib/cloudflareEmbedding';
 
 interface NoesisContextType {
@@ -85,6 +87,14 @@ interface NoesisContextType {
   manualRemoveEmbedNote: (noteId: string) => Promise<boolean>;
   manualEmbedFragment: (fragmentId: string) => Promise<boolean>;
   manualRemoveEmbedFragment: (fragmentId: string) => Promise<boolean>;
+
+  // AI Semantic Search & Controls
+  isSemanticSearch: boolean;
+  setIsSemanticSearch: (active: boolean) => void;
+  semanticSensitivity: 'broad' | 'standard' | 'strict';
+  setSemanticSensitivity: (sensitivity: 'broad' | 'standard' | 'strict') => void;
+  semanticThreshold: number;
+  performSemanticNoteSearch: (query: string) => Promise<{ id: string; similarity: number }[] | null>;
 }
 
 const NoesisContext = createContext<NoesisContextType | undefined>(undefined);
@@ -634,6 +644,53 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return true;
   };
 
+  // AI Semantic Search State & Controls
+  const [isSemanticSearch, setIsSemanticSearchState] = useState<boolean>(() => {
+    return localStorage.getItem('noesis_semantic_search_default') === 'true';
+  });
+
+  const [semanticSensitivity, setSemanticSensitivityState] = useState<'broad' | 'standard' | 'strict'>(() => {
+    return (localStorage.getItem('noesis_semantic_sensitivity') as any) || 'standard';
+  });
+
+  const setIsSemanticSearch = (active: boolean) => {
+    setIsSemanticSearchState(active);
+    localStorage.setItem('noesis_semantic_search_default', String(active));
+  };
+
+  const setSemanticSensitivity = (sensitivity: 'broad' | 'standard' | 'strict') => {
+    setSemanticSensitivityState(sensitivity);
+    localStorage.setItem('noesis_semantic_sensitivity', sensitivity);
+  };
+
+  const semanticThreshold = useMemo(() => {
+    switch (semanticSensitivity) {
+      case 'broad':
+        return 0.35;
+      case 'strict':
+        return 0.60;
+      case 'standard':
+      default:
+        return 0.45;
+    }
+  }, [semanticSensitivity]);
+
+  const performSemanticNoteSearch = async (
+    query: string
+  ): Promise<{ id: string; similarity: number }[] | null> => {
+    if (!query.trim() || !isSupabaseConfigured()) return null;
+    try {
+      const vector = await generateBgeM3Embedding(query);
+      if (!vector) return null;
+      const results = await searchNotesSemantic(vector, semanticThreshold, 20);
+      if (!results) return null;
+      return results.map((r) => ({ id: r.item.id, similarity: r.similarity }));
+    } catch (err) {
+      console.warn('performSemanticNoteSearch error:', err);
+      return null;
+    }
+  };
+
   return (
     <NoesisContext.Provider
       value={{
@@ -691,6 +748,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         manualRemoveEmbedNote,
         manualEmbedFragment,
         manualRemoveEmbedFragment,
+        isSemanticSearch,
+        setIsSemanticSearch,
+        semanticSensitivity,
+        setSemanticSensitivity,
+        semanticThreshold,
+        performSemanticNoteSearch,
       }}
     >
       {children}

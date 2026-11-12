@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNoesis } from '../context/NoesisContext';
 import { FragmentType } from '../types';
 import {
@@ -32,6 +32,23 @@ export const FragmentsPage: React.FC = () => {
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [fragmentIdToDelete, setFragmentIdToDelete] = useState<string | null>(null);
+  const mobileSearchRef = useRef<HTMLDivElement>(null);
+
+  // Close mobile search box when input is empty and user clicks outside
+  useEffect(() => {
+    if (!isMobileSearchOpen || search.length > 0) return;
+
+    const handlePointerDownOutside = (e: PointerEvent) => {
+      if (mobileSearchRef.current && !mobileSearchRef.current.contains(e.target as Node)) {
+        setIsMobileSearchOpen(false);
+      }
+    };
+
+    document.addEventListener('pointerdown', handlePointerDownOutside);
+    return () => {
+      document.removeEventListener('pointerdown', handlePointerDownOutside);
+    };
+  }, [isMobileSearchOpen, search]);
 
   const categories = [
     { id: 'all', label: 'All' },
@@ -231,48 +248,52 @@ export const FragmentsPage: React.FC = () => {
 
           {/* Mobile Search & Controls Layout (md:hidden) */}
           <div className="md:hidden space-y-2.5">
-            {/* Row 1: Compact Search Button + Category Tabs OR Full Expandable Search Bar */}
+            {/* Row 1: Search Button (Icon + Text) + Category Tabs OR Full Expandable Search Bar */}
             {isMobileSearchOpen || search ? (
-              <div className="relative flex items-center">
-                <Search size={15} className="absolute left-3.5 text-[#9C9388]" />
+              <div ref={mobileSearchRef} className="relative flex items-center">
+                <Search size={15} className="absolute left-3.5 text-[#9C9388] pointer-events-none" />
                 <input
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search fragments..."
                   autoFocus
-                  className="w-full text-xs pl-9 pr-9 py-2.5 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#9A3412] dark:border-[#EA580C] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none"
+                  className="w-full text-xs pl-9 pr-10 py-2.5 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#9A3412] dark:border-[#EA580C] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none"
                 />
                 <button
+                  type="button"
                   onClick={() => {
                     setSearch('');
                     setIsMobileSearchOpen(false);
                   }}
-                  className="absolute right-3 text-[#9C9388] hover:text-[#221F1D]"
+                  title="Close search"
+                  className="absolute right-3 p-1 text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors"
                 >
                   <X size={15} />
                 </button>
               </div>
             ) : (
               <div className="flex items-center gap-1.5">
-                {/* Search Icon Button */}
+                {/* Search Button (Icon + Text) */}
                 <button
+                  type="button"
                   onClick={() => setIsMobileSearchOpen(true)}
-                  className="p-2 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#9C9388] hover:text-[#9A3412] shrink-0"
-                  title="Search"
+                  className="px-2.5 py-2 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] text-xs font-medium flex items-center gap-1.5 shrink-0 transition-colors"
+                  title="Search fragments"
                 >
-                  <Search size={15} />
+                  <Search size={13} className="text-[#9C9388]" />
+                  <span>Search</span>
                 </button>
 
                 {/* Category Tabs */}
-                <div className="flex-1 flex items-center justify-between p-1 bg-[#F5EFEB] dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                <div className="flex-1 min-w-0 flex items-center justify-between p-1 bg-[#F5EFEB] dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
                   {categories.map((cat) => {
                     const isSelected = selectedType === cat.id;
                     return (
                       <button
                         key={cat.id}
                         onClick={() => setSelectedType(cat.id)}
-                        className={`px-2 py-1 text-xs font-medium rounded-lg transition-colors ${
+                        className={`px-1.5 sm:px-2 py-1 text-[11px] sm:text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
                           isSelected
                             ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
                             : 'text-[#6B635B] dark:text-[#A8A196]'

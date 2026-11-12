@@ -1,6 +1,6 @@
-import React from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useNoesis } from '../context/NoesisContext';
-import { Search, Feather, Star, X } from 'lucide-react';
+import { Search, Feather, Star, X, Sparkles } from 'lucide-react';
 
 export const StreamColumn: React.FC = () => {
   const {
@@ -13,30 +13,92 @@ export const StreamColumn: React.FC = () => {
     createNote,
     setActiveView,
     discardNoteIfEmpty,
+    isSemanticSearch,
+    setIsSemanticSearch,
+    semanticThreshold,
+    performSemanticNoteSearch,
   } = useNoesis();
 
+  // Semantic matches map: noteId -> similarity
+  const [semanticMatches, setSemanticMatches] = useState<Map<string, number>>(new Map());
+  const [isSearchingSemantic, setIsSearchingSemantic] = useState(false);
+
+  // Debounced semantic search for Stream
+  useEffect(() => {
+    if (!isSemanticSearch || !searchQuery.trim()) {
+      setSemanticMatches(new Map());
+      setIsSearchingSemantic(false);
+      return;
+    }
+
+    let isMounted = true;
+    setIsSearchingSemantic(true);
+    const timer = setTimeout(async () => {
+      try {
+        const results = await performSemanticNoteSearch(searchQuery);
+        if (isMounted) {
+          if (results && results.length > 0) {
+            const map = new Map<string, number>();
+            results.forEach((r) => map.set(r.id, r.similarity));
+            setSemanticMatches(map);
+          } else {
+            setSemanticMatches(new Map());
+          }
+        }
+      } catch (err) {
+        console.warn('Semantic search error in StreamColumn:', err);
+      } finally {
+        if (isMounted) setIsSearchingSemantic(false);
+      }
+    }, 350);
+
+    return () => {
+      isMounted = false;
+      clearTimeout(timer);
+    };
+  }, [searchQuery, isSemanticSearch, semanticThreshold]);
+
   // Filter notes based on active stream & search query
-  const filteredNotes = notes.filter((note) => {
-    // Stream filtering
-    if (activeStreamFilter === 'favorites') {
-      if (!note.favorite) return false;
-    } else if (activeStreamFilter === 'archived') {
-      if (!note.archived) return false;
-    } else {
-      if (note.archived) return false;
+  const filteredNotes = useMemo(() => {
+    const isSemanticActive = isSemanticSearch && searchQuery.trim().length > 0;
+
+    let result = notes.filter((note) => {
+      // Stream filtering
+      if (activeStreamFilter === 'favorites') {
+        if (!note.favorite) return false;
+      } else if (activeStreamFilter === 'archived') {
+        if (!note.archived) return false;
+      } else {
+        if (note.archived) return false;
+      }
+
+      // Semantic Search Match
+      if (isSemanticActive) {
+        return semanticMatches.has(note.id);
+      }
+
+      // Keyword query filtering
+      if (searchQuery.trim()) {
+        const q = searchQuery.toLowerCase();
+        const matchTitle = note.title.toLowerCase().includes(q);
+        const matchExcerpt = note.excerpt.toLowerCase().includes(q);
+        const matchTags = note.tags.some((t) => t.toLowerCase().includes(q));
+        return matchTitle || matchExcerpt || matchTags;
+      }
+
+      return true;
+    });
+
+    if (isSemanticActive) {
+      result.sort((a, b) => {
+        const simA = semanticMatches.get(a.id) || 0;
+        const simB = semanticMatches.get(b.id) || 0;
+        return simB - simA;
+      });
     }
 
-    // Search query filtering
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchTitle = note.title.toLowerCase().includes(q);
-      const matchExcerpt = note.excerpt.toLowerCase().includes(q);
-      const matchTags = note.tags.some((t) => t.toLowerCase().includes(q));
-      return matchTitle || matchExcerpt || matchTags;
-    }
-
-    return true;
-  });
+    return result;
+  }, [notes, activeStreamFilter, searchQuery, isSemanticSearch, semanticMatches]);
 
   const getStreamTitle = () => {
     if (activeStreamFilter === 'favorites') return 'Favorites';
@@ -91,17 +153,37 @@ export const StreamColumn: React.FC = () => {
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search notes and tags..."
-            className="w-full text-xs pl-8 pr-7 py-2 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors shadow-2xs"
+            placeholder={isSemanticSearch ? "Cari makna catatan..." : "Search notes and tags..."}
+            className="w-full text-xs pl-8 pr-16 py-2 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors shadow-2xs"
           />
-          {searchQuery && (
+          <div className="absolute right-1.5 flex items-center gap-1">
+            {searchQuery && (
+              <button
+                onClick={() => setSearchQuery('')}
+                className="p-1 text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors"
+                title="Clear search"
+              >
+                <X size={12} />
+              </button>
+            )}
             <button
-              onClick={() => setSearchQuery('')}
-              className="absolute right-2.5 text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]"
+              type="button"
+              onClick={() => setIsSemanticSearch(!isSemanticSearch)}
+              title={
+                isSemanticSearch
+                  ? "AI Semantic Search Aktif"
+                  : "Aktifkan AI Semantic Search"
+              }
+              className={`px-1.5 py-1 rounded-lg text-[10px] font-mono flex items-center gap-0.5 transition-all select-none ${
+                isSemanticSearch
+                  ? 'bg-[#9A3412] dark:bg-[#EA580C] text-white font-medium shadow-2xs'
+                  : 'bg-[#E8E2D8]/60 dark:bg-[#2A2624] text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D]'
+              }`}
             >
-              <X size={12} />
+              <Sparkles size={10} className={isSearchingSemantic ? 'animate-spin' : ''} />
+              <span>AI</span>
             </button>
-          )}
+          </div>
         </div>
       </div>
 
@@ -110,7 +192,9 @@ export const StreamColumn: React.FC = () => {
         {filteredNotes.length === 0 ? (
           <div className="py-12 px-4 text-center">
             <p className="font-serif italic text-sm text-[#9C9388] dark:text-[#736C62]">
-              No notes match your filter.
+              {isSemanticSearch && searchQuery.trim()
+                ? 'Tidak ada catatan yang cocok dengan makna pencarian.'
+                : 'No notes match your filter.'}
             </p>
             <button
               onClick={() => {
@@ -166,12 +250,21 @@ export const StreamColumn: React.FC = () => {
                 </p>
 
                 {/* Unboxed Metadata with Typographic Separator */}
-                <div className="flex items-center gap-1.5 text-[11px] text-[#9C9388] dark:text-[#736C62] mt-2 font-mono">
+                <div className="flex items-center gap-1.5 text-[11px] text-[#9C9388] dark:text-[#736C62] mt-2 font-mono flex-wrap">
                   <span className="uppercase text-[10px] text-[#9A3412] dark:text-[#EA580C] font-semibold">{note.type || 'thought'}</span>
                   <span aria-hidden="true">·</span>
                   <span>{formatCardDate(note.updatedAt || note.createdAt)}</span>
                   <span aria-hidden="true">·</span>
                   <span>{note.wordCount || 0} words</span>
+                  {isSemanticSearch && searchQuery.trim() && semanticMatches.has(note.id) && (
+                    <>
+                      <span aria-hidden="true">·</span>
+                      <span className="text-[#9A3412] dark:text-[#EA580C] font-semibold flex items-center gap-0.5">
+                        <Sparkles size={9} />
+                        {Math.round((semanticMatches.get(note.id) || 0) * 100)}% match
+                      </span>
+                    </>
+                  )}
                 </div>
               </div>
             );
