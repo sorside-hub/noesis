@@ -48,7 +48,7 @@ const WorkspaceShell: React.FC = () => {
       {/* Main Workspace Frame */}
       <div className="flex-1 flex flex-col h-full overflow-hidden relative pb-16 md:pb-0">
         {/* Mobile Top Header */}
-        <header className="md:hidden flex items-center justify-between px-4 py-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/95 dark:bg-[#151413]/95 backdrop-blur-sm z-30 shrink-0">
+        <header className="md:hidden flex items-center justify-between px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/95 dark:bg-[#151413]/95 backdrop-blur-sm z-30 shrink-0">
           <div className="flex items-center gap-2.5">
             <button
               onClick={() => setIsMobileDrawerOpen(true)}

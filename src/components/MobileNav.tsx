@@ -20,13 +20,13 @@ export const MobileNav: React.FC = () => {
       <button
         onClick={() => openFragmentDrawer(null)}
         aria-label="Capture new fragment"
-        className="md:hidden fixed bottom-20 right-5 z-40 w-13 h-13 rounded-full bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
+        className="md:hidden fixed bottom-[calc(4.75rem+env(safe-area-inset-bottom))] right-5 z-40 w-13 h-13 rounded-full bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-xl flex items-center justify-center hover:scale-105 active:scale-95 transition-transform"
       >
         <Feather size={22} />
       </button>
 
       {/* Mobile Bottom Navigation Bar - Always visible across all views including Editor */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#FAF7F2]/95 dark:bg-[#151413]/95 backdrop-blur-md border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2 py-2 flex items-center justify-around select-none">
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-40 bg-[#FAF7F2]/95 dark:bg-[#151413]/95 backdrop-blur-md border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2 pt-2 pb-[max(0.625rem,env(safe-area-inset-bottom))] flex items-center justify-around select-none">
         {navItems.map((item) => {
           const Icon = item.icon;
           // When viewing or editing a note, highlight Library as the active section

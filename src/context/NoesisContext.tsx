@@ -99,17 +99,38 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   useEffect(() => {
     localStorage.setItem('noesis_theme', theme);
     const root = document.documentElement;
-    if (theme === 'dark') {
-      root.classList.add('dark');
-    } else if (theme === 'light') {
-      root.classList.remove('dark');
-    } else {
-      // System preference
-      if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+    const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
+
+    const applyTheme = () => {
+      const isDark =
+        theme === 'dark' ||
+        (theme === 'system' && mediaQuery.matches);
+
+      if (isDark) {
         root.classList.add('dark');
       } else {
         root.classList.remove('dark');
       }
+
+      // Dynamic browser & mobile status bar color (#FAF7F2 for light, #151413 for dark)
+      const themeColor = isDark ? '#151413' : '#FAF7F2';
+      const metaThemeElements = document.querySelectorAll('meta[name="theme-color"]');
+      metaThemeElements.forEach((el) => {
+        el.setAttribute('content', themeColor);
+      });
+      if (metaThemeElements.length === 0) {
+        const meta = document.createElement('meta');
+        meta.name = 'theme-color';
+        meta.content = themeColor;
+        document.head.appendChild(meta);
+      }
+    };
+
+    applyTheme();
+
+    if (theme === 'system') {
+      mediaQuery.addEventListener('change', applyTheme);
+      return () => mediaQuery.removeEventListener('change', applyTheme);
     }
   }, [theme]);
 

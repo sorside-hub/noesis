@@ -331,7 +331,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       {/* Main Center Canvas */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Top Header Bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/90 dark:bg-[#151413]/90 backdrop-blur-sm z-10 shrink-0">
+        <div className="flex items-center justify-between px-4 sm:px-6 pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/90 dark:bg-[#151413]/90 backdrop-blur-sm z-10 shrink-0">
           {/* Left: Library Back Navigation & Note Type */}
           <div className="flex items-center gap-2 text-xs truncate">
             <button

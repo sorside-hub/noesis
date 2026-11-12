@@ -17,7 +17,7 @@ export default defineConfig(() => {
           name: 'Noesis — Intellectual Sanctuary',
           short_name: 'Noesis',
           description: 'A minimal, elegant offline-first personal knowledge base and micro-note sanctuary.',
-          theme_color: '#151413',
+          theme_color: '#FAF7F2',
           background_color: '#FAF7F2',
           display: 'standalone',
           start_url: '/',
