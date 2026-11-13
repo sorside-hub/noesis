@@ -4,8 +4,9 @@
 // Fully supports Supabase Realtime & pgvector similarity search
 
 export const SUPABASE_SQL_SCRIPT = `-- ========================================================================
--- NOESIS KNOWLEDGE BASE - SUPABASE SETUP SCRIPT
+-- NOESIS KNOWLEDGE BASE - SUPABASE SETUP & AUTH RLS SCRIPT
 -- Model: Cloudflare Workers AI 'bge-m3' (1024 Dimensions)
+-- Auth: Supabase Auth (Email & Password) with Per-User Row Level Security
 -- Idempotent: Aman dijalankan berulang kali tanpa menghapus data yang ada
 -- Realtime: Mendukung Supabase Realtime pub/sub
 -- ========================================================================
@@ -16,6 +17,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 -- 2. TABEL NOTES (LIBRARY)
 CREATE TABLE IF NOT EXISTS public.notes (
   id TEXT PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   title TEXT NOT NULL DEFAULT '',
   content TEXT DEFAULT '',
   excerpt TEXT DEFAULT '',
@@ -34,6 +36,7 @@ CREATE TABLE IF NOT EXISTS public.notes (
 -- 3. TABEL FRAGMENTS
 CREATE TABLE IF NOT EXISTS public.fragments (
   id TEXT PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   type TEXT DEFAULT 'thought' CHECK (type IN ('thought', 'reference', 'idea')),
   title TEXT NOT NULL DEFAULT '',
   content TEXT DEFAULT '',
@@ -49,6 +52,7 @@ CREATE TABLE IF NOT EXISTS public.fragments (
 -- 3B. TABEL DISCOVER CONNECTIONS (Sinkronisasi koneksi & analisis antar perangkat)
 CREATE TABLE IF NOT EXISTS public.discover_connections (
   pair_key TEXT PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   item_a_id TEXT NOT NULL,
   item_a_kind TEXT NOT NULL CHECK (item_a_kind IN ('note', 'fragment')),
   item_b_id TEXT NOT NULL,
@@ -58,33 +62,51 @@ CREATE TABLE IF NOT EXISTS public.discover_connections (
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
--- 4. PASTIKAN KOLOM EMBEDDING TERSEDIA & BERSIHKAN KOLOM TIDAK DIPAKAI
+-- 4. MIGRASI KOLOM (Untuk database yang sudah pernah dibuat sebelumnya)
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
 ALTER TABLE public.notes DROP COLUMN IF EXISTS word_count;
+
+ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
 
--- 5. AMANKAN DENGAN ROW LEVEL SECURITY (RLS)
+ALTER TABLE public.discover_connections ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
+
+CREATE INDEX IF NOT EXISTS notes_user_id_idx ON public.notes (user_id);
+CREATE INDEX IF NOT EXISTS fragments_user_id_idx ON public.fragments (user_id);
+CREATE INDEX IF NOT EXISTS discover_connections_user_id_idx ON public.discover_connections (user_id);
+
+-- 5. AMANKAN DENGAN ROW LEVEL SECURITY (RLS) PER USER
 ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fragments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.discover_connections ENABLE ROW LEVEL SECURITY;
 
--- 6. KEBIJAKAN AKSES (RLS POLICIES) - Dibuat hanya jika belum ada
-DO $$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to notes' AND tablename = 'notes') THEN
-    CREATE POLICY "Allow public access to notes" ON public.notes FOR ALL USING (true) WITH CHECK (true);
-  END IF;
+-- 6. KEBIJAKAN AKSES KETAT (Hanya user login pemilik data yang bisa baca/tulis)
+DROP POLICY IF EXISTS "Allow public access to notes" ON public.notes;
+DROP POLICY IF EXISTS "Users can manage own notes" ON public.notes;
+CREATE POLICY "Users can manage own notes"
+  ON public.notes FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
 
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to fragments' AND tablename = 'fragments') THEN
-    CREATE POLICY "Allow public access to fragments" ON public.fragments FOR ALL USING (true) WITH CHECK (true);
-  END IF;
+DROP POLICY IF EXISTS "Allow public access to fragments" ON public.fragments;
+DROP POLICY IF EXISTS "Users can manage own fragments" ON public.fragments;
+CREATE POLICY "Users can manage own fragments"
+  ON public.fragments FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
 
-  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to discover_connections' AND tablename = 'discover_connections') THEN
-    CREATE POLICY "Allow public access to discover_connections" ON public.discover_connections FOR ALL USING (true) WITH CHECK (true);
-  END IF;
-END $$;
+DROP POLICY IF EXISTS "Allow public access to discover_connections" ON public.discover_connections;
+DROP POLICY IF EXISTS "Users can manage own discover_connections" ON public.discover_connections;
+CREATE POLICY "Users can manage own discover_connections"
+  ON public.discover_connections FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
 
 -- 7. AKTIFKAN SUPABASE REALTIME SECARA AMAN
 DO $$
@@ -124,7 +146,7 @@ CREATE INDEX IF NOT EXISTS fragments_embedding_hnsw_idx
   ON public.fragments 
   USING hnsw (embedding vector_cosine_ops);
 
--- 9. FUNGSI SEMANTIC MATCHING (RPC) UNTUK PENCARIAN MAKNA (COSINE SIMILARITY)
+-- 9. FUNGSI SEMANTIC MATCHING (RPC) PER USER
 CREATE OR REPLACE FUNCTION match_notes (
   query_embedding vector(1024),
   match_threshold float DEFAULT 0.45,
@@ -152,7 +174,8 @@ BEGIN
     notes.tags,
     (1 - (notes.embedding <=> query_embedding))::float AS similarity
   FROM public.notes
-  WHERE notes.embedding IS NOT NULL
+  WHERE notes.user_id = auth.uid()
+    AND notes.embedding IS NOT NULL
     AND 1 - (notes.embedding <=> query_embedding) > match_threshold
   ORDER BY similarity DESC
   LIMIT match_count;
@@ -184,7 +207,8 @@ BEGIN
     fragments.tags,
     (1 - (fragments.embedding <=> query_embedding))::float AS similarity
   FROM public.fragments
-  WHERE fragments.embedding IS NOT NULL
+  WHERE fragments.user_id = auth.uid()
+    AND fragments.embedding IS NOT NULL
     AND 1 - (fragments.embedding <=> query_embedding) > match_threshold
   ORDER BY similarity DESC
   LIMIT match_count;

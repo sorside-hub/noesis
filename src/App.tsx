@@ -13,7 +13,8 @@ import { ProjectsPage } from './pages/ProjectsPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
-import { Menu, Sun, Moon, Settings as SettingsIcon } from 'lucide-react';
+import { AuthScreen } from './components/AuthScreen';
+import { Menu, Sun, Moon, Settings as SettingsIcon, Loader2 } from 'lucide-react';
 
 const WorkspaceShell: React.FC = () => {
   const {
@@ -23,7 +24,26 @@ const WorkspaceShell: React.FC = () => {
     setIsMobileDrawerOpen,
     theme,
     setTheme,
+    authUser,
+    authLoading,
+    offlineBypass,
   } = useNoesis();
+
+  if (authLoading) {
+    return (
+      <div className="h-screen w-screen flex flex-col items-center justify-center gap-3 bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1]">
+        <span className="font-serif text-2xl font-medium tracking-tight">Noesis</span>
+        <div className="flex items-center gap-2 text-xs text-[#6B635B] dark:text-[#A8A196]">
+          <Loader2 size={14} className="animate-spin text-[#9A3412] dark:text-[#EA580C]" />
+          <span>Memeriksa sesi akun...</span>
+        </div>
+      </div>
+    );
+  }
+
+  if (!authUser && !offlineBypass) {
+    return <AuthScreen />;
+  }
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1]">

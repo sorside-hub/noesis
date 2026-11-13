@@ -1,4 +1,4 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient, Session, User, AuthChangeEvent } from '@supabase/supabase-js';
 import { Note, Fragment, DiscoverConnectionRecord } from '../types';
 
 export const getSupabaseUrl = (): string => {
@@ -32,6 +32,12 @@ let cachedClient: SupabaseClient | null = null;
 let cachedUrl = '';
 let cachedKey = '';
 
+export const resetSupabaseClientCache = () => {
+  cachedClient = null;
+  cachedUrl = '';
+  cachedKey = '';
+};
+
 export const getSupabaseClient = (): SupabaseClient | null => {
   if (!isSupabaseConfigured()) return null;
   const url = getSupabaseUrl();
@@ -41,12 +47,149 @@ export const getSupabaseClient = (): SupabaseClient | null => {
   }
   cachedUrl = url;
   cachedKey = key;
-  cachedClient = createClient(url, key);
+  cachedClient = createClient(url, key, {
+    auth: {
+      persistSession: true,
+      autoRefreshToken: true,
+      detectSessionInUrl: true,
+    },
+  });
   return cachedClient;
 };
 
 // Keep export for backward compatibility
 export const supabase = isSupabaseConfigured() ? getSupabaseClient() : null;
+
+const resolveAuthUserId = async (client: SupabaseClient): Promise<string | null> => {
+  try {
+    const { data } = await client.auth.getSession();
+    return data.session?.user?.id ?? null;
+  } catch {
+    return null;
+  }
+};
+
+// ============================================================================
+// SUPABASE AUTHENTICATION HELPERS (Email & Password)
+// ============================================================================
+
+export const getSupabaseSession = async (): Promise<Session | null> => {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const { data, error } = await client.auth.getSession();
+    if (error) {
+      console.warn('Supabase getSession error:', error.message);
+      return null;
+    }
+    return data.session ?? null;
+  } catch (err) {
+    console.warn('Supabase getSession network error:', err);
+    return null;
+  }
+};
+
+export const onSupabaseAuthStateChange = (
+  callback: (event: AuthChangeEvent, session: Session | null) => void
+): (() => void) => {
+  const client = getSupabaseClient();
+  if (!client) return () => {};
+  const { data } = client.auth.onAuthStateChange((event, session) => {
+    callback(event, session);
+  });
+  return () => {
+    data.subscription.unsubscribe();
+  };
+};
+
+export const signInWithEmailPassword = async (
+  email: string,
+  password: string
+): Promise<{ user: User | null; session: Session | null; error: string | null }> => {
+  const client = getSupabaseClient();
+  if (!client) {
+    return { user: null, session: null, error: 'Kredensial Supabase belum dikonfigurasi.' };
+  }
+  try {
+    const { data, error } = await client.auth.signInWithPassword({
+      email: email.trim(),
+      password,
+    });
+    if (error) {
+      return { user: null, session: null, error: error.message };
+    }
+    return { user: data.user ?? null, session: data.session ?? null, error: null };
+  } catch (err: any) {
+    return { user: null, session: null, error: err?.message || 'Gagal terhubung ke Supabase Auth.' };
+  }
+};
+
+export const signUpWithEmailPassword = async (
+  email: string,
+  password: string
+): Promise<{
+  user: User | null;
+  session: Session | null;
+  needsEmailConfirmation: boolean;
+  error: string | null;
+}> => {
+  const client = getSupabaseClient();
+  if (!client) {
+    return {
+      user: null,
+      session: null,
+      needsEmailConfirmation: false,
+      error: 'Kredensial Supabase belum dikonfigurasi.',
+    };
+  }
+  try {
+    const { data, error } = await client.auth.signUp({
+      email: email.trim(),
+      password,
+    });
+    if (error) {
+      return { user: null, session: null, needsEmailConfirmation: false, error: error.message };
+    }
+    const needsEmailConfirmation = Boolean(data.user && !data.session);
+    return {
+      user: data.user ?? null,
+      session: data.session ?? null,
+      needsEmailConfirmation,
+      error: null,
+    };
+  } catch (err: any) {
+    return {
+      user: null,
+      session: null,
+      needsEmailConfirmation: false,
+      error: err?.message || 'Gagal mendaftar ke Supabase Auth.',
+    };
+  }
+};
+
+export const signOutFromSupabase = async (): Promise<{ error: string | null }> => {
+  const client = getSupabaseClient();
+  if (!client) return { error: null };
+  try {
+    const { error } = await client.auth.signOut();
+    return { error: error ? error.message : null };
+  } catch (err: any) {
+    return { error: err?.message || 'Gagal logout.' };
+  }
+};
+
+export const updateSupabasePassword = async (
+  newPassword: string
+): Promise<{ error: string | null }> => {
+  const client = getSupabaseClient();
+  if (!client) return { error: 'Supabase belum terhubung.' };
+  try {
+    const { error } = await client.auth.updateUser({ password: newPassword });
+    return { error: error ? error.message : null };
+  } catch (err: any) {
+    return { error: err?.message || 'Gagal memperbarui password.' };
+  }
+};
 
 // ============================================================================
 // DATA MAPPERS (TypeScript camelCase <-> PostgreSQL snake_case)
@@ -166,10 +309,13 @@ export const upsertNoteToSupabase = async (
   note: Note,
   embedding?: number[] | null
 ): Promise<boolean> => {
-  if (!supabase) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
   try {
     const dbRow = toDbNote(note, embedding);
-    const { error } = await supabase.from('notes').upsert(dbRow, { onConflict: 'id' });
+    const userId = await resolveAuthUserId(client);
+    if (userId) dbRow.user_id = userId;
+    const { error } = await client.from('notes').upsert(dbRow, { onConflict: 'id' });
     if (error) {
       console.warn('Supabase upsertNote error:', error.message);
       return false;
@@ -182,9 +328,10 @@ export const upsertNoteToSupabase = async (
 };
 
 export const deleteNoteFromSupabase = async (noteId: string): Promise<boolean> => {
-  if (!supabase) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
   try {
-    const { error } = await supabase.from('notes').delete().eq('id', noteId);
+    const { error } = await client.from('notes').delete().eq('id', noteId);
     if (error) {
       console.warn('Supabase deleteNote error:', error.message);
       return false;
@@ -197,9 +344,10 @@ export const deleteNoteFromSupabase = async (noteId: string): Promise<boolean> =
 };
 
 export const fetchFragmentsFromSupabase = async (): Promise<Fragment[] | null> => {
-  if (!supabase) return null;
+  const client = getSupabaseClient();
+  if (!client) return null;
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('fragments')
       .select('*')
       .order('created_at', { ascending: false });
@@ -220,10 +368,13 @@ export const upsertFragmentToSupabase = async (
   fragment: Fragment,
   embedding?: number[] | null
 ): Promise<boolean> => {
-  if (!supabase) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
   try {
     const dbRow = toDbFragment(fragment, embedding);
-    const { error } = await supabase.from('fragments').upsert(dbRow, { onConflict: 'id' });
+    const userId = await resolveAuthUserId(client);
+    if (userId) dbRow.user_id = userId;
+    const { error } = await client.from('fragments').upsert(dbRow, { onConflict: 'id' });
     if (error) {
       console.warn('Supabase upsertFragment error:', error.message);
       return false;
@@ -236,9 +387,10 @@ export const upsertFragmentToSupabase = async (
 };
 
 export const deleteFragmentFromSupabase = async (fragmentId: string): Promise<boolean> => {
-  if (!supabase) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
   try {
-    const { error } = await supabase.from('fragments').delete().eq('id', fragmentId);
+    const { error } = await client.from('fragments').delete().eq('id', fragmentId);
     if (error) {
       console.warn('Supabase deleteFragment error:', error.message);
       return false;
@@ -247,6 +399,38 @@ export const deleteFragmentFromSupabase = async (fragmentId: string): Promise<bo
   } catch (err) {
     console.warn('Supabase deleteFragment network error:', err);
     return false;
+  }
+};
+
+export const fetchFragmentEmbeddingById = async (
+  fragmentId: string
+): Promise<{ ok: boolean; embedding: number[] | null; embeddedAt?: string }> => {
+  const client = getSupabaseClient();
+  if (!client) return { ok: false, embedding: null };
+  try {
+    const { data, error } = await client
+      .from('fragments')
+      .select('embedding, embedded_at')
+      .eq('id', fragmentId)
+      .maybeSingle();
+
+    if (error) {
+      console.warn('Supabase fetchFragmentEmbeddingById error:', error.message);
+      return { ok: false, embedding: null };
+    }
+
+    if (!data) {
+      return { ok: true, embedding: null };
+    }
+
+    return {
+      ok: true,
+      embedding: parsePgVector((data as any).embedding),
+      embeddedAt: (data as any).embedded_at || undefined,
+    };
+  } catch (err) {
+    console.warn('Supabase fetchFragmentEmbeddingById network error:', err);
+    return { ok: false, embedding: null };
   }
 };
 
@@ -264,9 +448,10 @@ export const searchNotesSemantic = async (
   matchThreshold = 0.45,
   matchCount = 8
 ): Promise<SemanticSearchResult<Note>[] | null> => {
-  if (!supabase) return null;
+  const client = getSupabaseClient();
+  if (!client) return null;
   try {
-    const { data, error } = await supabase.rpc('match_notes', {
+    const { data, error } = await client.rpc('match_notes', {
       query_embedding: queryEmbedding,
       match_threshold: matchThreshold,
       match_count: matchCount,
@@ -292,9 +477,10 @@ export const searchFragmentsSemantic = async (
   matchThreshold = 0.45,
   matchCount = 8
 ): Promise<SemanticSearchResult<Fragment>[] | null> => {
-  if (!supabase) return null;
+  const client = getSupabaseClient();
+  if (!client) return null;
   try {
-    const { data, error } = await supabase.rpc('match_fragments', {
+    const { data, error } = await client.rpc('match_fragments', {
       query_embedding: queryEmbedding,
       match_threshold: matchThreshold,
       match_count: matchCount,
@@ -427,19 +613,22 @@ export const upsertDiscoverConnectionToSupabase = async (
   const client = getSupabaseClient();
   if (!client) return false;
   try {
-    const { error } = await client.from('discover_connections').upsert(
-      {
-        pair_key: record.pairKey,
-        item_a_id: record.itemAId,
-        item_a_kind: record.itemAKind,
-        item_b_id: record.itemBId,
-        item_b_kind: record.itemBKind,
-        status: record.status,
-        analysis: record.analysis ?? null,
-        updated_at: record.updatedAt || new Date().toISOString(),
-      },
-      { onConflict: 'pair_key' }
-    );
+    const userId = await resolveAuthUserId(client);
+    const payload: Record<string, any> = {
+      pair_key: record.pairKey,
+      item_a_id: record.itemAId,
+      item_a_kind: record.itemAKind,
+      item_b_id: record.itemBId,
+      item_b_kind: record.itemBKind,
+      status: record.status,
+      analysis: record.analysis ?? null,
+      updated_at: record.updatedAt || new Date().toISOString(),
+    };
+    if (userId) payload.user_id = userId;
+
+    const { error } = await client
+      .from('discover_connections')
+      .upsert(payload, { onConflict: 'pair_key' });
 
     if (error) {
       console.warn('Supabase upsertDiscoverConnection error:', error.message);
@@ -498,6 +687,26 @@ export const unlinkDiscoverConnectionInSupabase = async (pairKey: string): Promi
   }
 };
 
+export const deleteDiscoverConnectionsForItem = async (itemId: string): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client
+      .from('discover_connections')
+      .delete()
+      .or(`item_a_id.eq.${itemId},item_b_id.eq.${itemId}`);
+
+    if (error) {
+      console.warn('Supabase deleteDiscoverConnectionsForItem error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase deleteDiscoverConnectionsForItem network error:', err);
+    return false;
+  }
+};
+
 // ============================================================================
 // REALTIME LISTENER
 // ============================================================================
@@ -507,9 +716,10 @@ export const subscribeToRealtimeChanges = (
   onFragmentsChange: () => void,
   onDiscoverConnectionsChange?: () => void
 ) => {
-  if (!supabase) return () => {};
+  const client = getSupabaseClient();
+  if (!client) return () => {};
 
-  const channel = supabase
+  const channel = client
     .channel('noesis-realtime-sync')
     .on(
       'postgres_changes',
@@ -539,6 +749,6 @@ export const subscribeToRealtimeChanges = (
   channel.subscribe();
 
   return () => {
-    supabase.removeChannel(channel);
+    client.removeChannel(channel);
   };
 };

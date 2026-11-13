@@ -17,6 +17,8 @@ import {
   ArrowUpRight,
   GitBranch,
   FileText,
+  Loader2,
+  AlertCircle,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 
@@ -55,6 +57,22 @@ export const FragmentDrawer: React.FC = () => {
   const [isSavedNotice, setIsSavedNotice] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [isEmbeddingLoading, setIsEmbeddingLoading] = useState(false);
+  const [showPromoteConfirm, setShowPromoteConfirm] = useState(false);
+  const [isPromoting, setIsPromoting] = useState(false);
+  const [promoteError, setPromoteError] = useState<string | null>(null);
+
+  const handleConfirmPromote = async () => {
+    if (!activeFragment || isPromoting) return;
+    setIsPromoting(true);
+    setPromoteError(null);
+    const res = await promoteFragmentToNote(activeFragment.id);
+    setIsPromoting(false);
+    if (!res.ok) {
+      setPromoteError(res.error || 'Gagal memindahkan Fragment menjadi Note.');
+    } else {
+      setShowPromoteConfirm(false);
+    }
+  };
 
   const handleTriggerFragmentEmbed = async () => {
     if (!activeFragment) return;
@@ -115,6 +133,9 @@ export const FragmentDrawer: React.FC = () => {
       setTagsList([]);
       setTagInput('');
     }
+    setShowPromoteConfirm(false);
+    setIsPromoting(false);
+    setPromoteError(null);
   }, [activeFragment, activeFragmentId, isFragmentDrawerOpen]);
 
   if (!isFragmentDrawerOpen) return null;
@@ -250,7 +271,9 @@ export const FragmentDrawer: React.FC = () => {
   return (
     <div
       className="fixed inset-0 z-50 flex justify-end bg-black/40 backdrop-blur-xs transition-opacity animate-in fade-in duration-200"
-      onClick={closeFragmentDrawer}
+      onClick={() => {
+        if (!isPromoting) closeFragmentDrawer();
+      }}
     >
       <div
         className="w-full sm:w-[480px] lg:w-[540px] h-full bg-[#FAF7F2] dark:bg-[#1A1817] border-l border-[#E8E2D8] dark:border-[#2F2B28] shadow-2xl flex flex-col justify-between overflow-hidden animate-in slide-in-from-right duration-200"
@@ -349,8 +372,9 @@ export const FragmentDrawer: React.FC = () => {
               {/* Delete Fragment */}
               <button
                 type="button"
+                disabled={isPromoting}
                 onClick={() => setShowDeleteConfirm(true)}
-                className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+                className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors"
                 title="Delete Fragment"
               >
                 <Trash2 size={16} />
@@ -359,8 +383,9 @@ export const FragmentDrawer: React.FC = () => {
               {/* Close Drawer */}
               <button
                 type="button"
+                disabled={isPromoting}
                 onClick={closeFragmentDrawer}
-                className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors ml-1"
+                className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors ml-1"
                 title="Close"
               >
                 <X size={18} />
@@ -637,24 +662,79 @@ export const FragmentDrawer: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="px-5 sm:px-6 py-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] flex items-center justify-between gap-2 shrink-0">
-            <button
-              type="button"
-              onClick={() => activeFragment && promoteFragmentToNote(activeFragment.id)}
-              className="px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:border-[#9A3412] hover:text-[#9A3412] dark:hover:text-[#EA580C] transition-colors flex items-center gap-1.5"
-              title="Buat Note baru di Library dari fragment ini tanpa menghapus fragment asli"
-            >
-              <FileText size={13} />
-              <span>Kembangkan jadi Note</span>
-            </button>
+          <div className="border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] shrink-0">
+            {promoteError && (
+              <div className="mx-5 sm:mx-6 mt-3 p-2.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+                <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                <span>{promoteError}</span>
+              </div>
+            )}
 
-            <button
-              type="button"
-              onClick={closeFragmentDrawer}
-              className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs"
-            >
-              Done
-            </button>
+            {showPromoteConfirm ? (
+              <div className="px-5 sm:px-6 py-3.5 space-y-3">
+                <div className="text-xs leading-relaxed text-[#221F1D] dark:text-[#EDE8E1]">
+                  <span className="font-semibold">Naikkan pangkat menjadi Note?</span>{' '}
+                  <span className="text-[#6B635B] dark:text-[#A8A196]">
+                    Judul, isi, tags, source, seluruh relasi
+                    {activeFragment?.embeddedAt ? ', dan vector embedding' : ''} akan dipindahkan ke Library, lalu Fragment ini akan dihapus secara aman.
+                  </span>
+                </div>
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    disabled={isPromoting}
+                    onClick={() => {
+                      setShowPromoteConfirm(false);
+                      setPromoteError(null);
+                    }}
+                    className="px-3 py-1.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-xs text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] disabled:opacity-50 transition-colors"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="button"
+                    disabled={isPromoting}
+                    onClick={handleConfirmPromote}
+                    className="px-3.5 py-1.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-70 transition-colors shadow-xs flex items-center gap-1.5"
+                  >
+                    {isPromoting ? (
+                      <>
+                        <Loader2 size={13} className="animate-spin" />
+                        <span>Memindahkan...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileText size={13} />
+                        <span>Ya, Pindahkan Jadi Note</span>
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="px-5 sm:px-6 py-4 flex items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPromoteError(null);
+                    setShowPromoteConfirm(true);
+                  }}
+                  className="px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:border-[#9A3412] hover:text-[#9A3412] dark:hover:text-[#EA580C] transition-colors flex items-center gap-1.5"
+                  title="Pindahkan menjadi Note lengkap di Library (termasuk relasi & embedding) lalu hapus fragment lama"
+                >
+                  <FileText size={13} />
+                  <span>Kembangkan jadi Note</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={closeFragmentDrawer}
+                  className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs"
+                >
+                  Done
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>

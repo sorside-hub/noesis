@@ -18,6 +18,8 @@ import {
   Monitor,
   ChevronLeft,
   ChevronRight,
+  LogOut,
+  LogIn,
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -33,7 +35,12 @@ export const Sidebar: React.FC = () => {
     isSidebarCollapsed,
     toggleSidebar,
     openFragmentDrawer,
+    authUser,
+    signOut,
   } = useNoesis();
+
+  const userEmail = authUser?.email || 'Mode Lokal (Offline)';
+  const userInitial = (authUser?.email?.[0] || 'N').toUpperCase();
 
   const totalNotes = notes.length;
   const favoriteCount = notes.filter((n) => n.favorite).length;
@@ -94,6 +101,13 @@ export const Sidebar: React.FC = () => {
         </div>
 
         <div className="flex flex-col items-center gap-2">
+          <button
+            onClick={() => signOut()}
+            title={authUser ? `Keluar (${userEmail})` : 'Masuk ke Akun'}
+            className="w-9 h-9 rounded-lg flex items-center justify-center text-[#6B635B] dark:text-[#A8A196] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+          >
+            {authUser ? <LogOut size={16} /> : <LogIn size={16} />}
+          </button>
           <button
             onClick={toggleSidebar}
             title="Expand Sidebar"
@@ -295,15 +309,31 @@ export const Sidebar: React.FC = () => {
           </button>
         </div>
 
-        {/* User Workspace Info */}
-        <div className="flex items-center gap-2.5 px-1">
-          <div className="w-7 h-7 rounded-full bg-[#E8E2D8] dark:bg-[#2F2B28] flex items-center justify-center font-serif text-xs font-semibold text-[#6B635B] dark:text-[#EDE8E1]">
-            N
+        {/* User Workspace Info & Auth Action */}
+        <div className="flex items-center justify-between gap-2 px-1">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <div className="w-7 h-7 rounded-full bg-[#E8E2D8] dark:bg-[#2F2B28] flex items-center justify-center font-serif text-xs font-semibold text-[#6B635B] dark:text-[#EDE8E1] shrink-0">
+              {userInitial}
+            </div>
+            <div className="min-w-0 text-left">
+              <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate">
+                {authUser ? 'Personal Vault' : 'Local Workspace'}
+              </p>
+              <p className="text-[10px] text-[#9C9388] dark:text-[#736C62] truncate" title={userEmail}>
+                {userEmail}
+              </p>
+            </div>
           </div>
-          <div className="truncate text-left">
-            <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate">Personal Atelier</p>
-            <p className="text-[10px] text-[#9C9388] dark:text-[#736C62] truncate">sorside.raw@noesis.space</p>
-          </div>
+
+          <button
+            type="button"
+            onClick={() => signOut()}
+            title={authUser ? 'Keluar dari Akun' : 'Masuk ke Akun'}
+            className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors shrink-0"
+            aria-label={authUser ? 'Keluar' : 'Masuk'}
+          >
+            {authUser ? <LogOut size={14} /> : <LogIn size={14} />}
+          </button>
         </div>
       </div>
     </aside>

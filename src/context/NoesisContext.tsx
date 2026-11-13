@@ -15,8 +15,16 @@ import {
   DiscoverConnectionRecord,
 } from '../types';
 import { INITIAL_NOTES, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
+import type { User } from '@supabase/supabase-js';
 import {
   isSupabaseConfigured,
+  resetSupabaseClientCache,
+  getSupabaseSession,
+  onSupabaseAuthStateChange,
+  signInWithEmailPassword,
+  signUpWithEmailPassword,
+  signOutFromSupabase,
+  updateSupabasePassword,
   fetchNotesFromSupabase,
   upsertNoteToSupabase,
   deleteNoteFromSupabase,
@@ -30,6 +38,8 @@ import {
   upsertDiscoverConnectionToSupabase,
   restoreDismissedDiscoverConnectionsInSupabase,
   unlinkDiscoverConnectionInSupabase,
+  fetchFragmentEmbeddingById,
+  deleteDiscoverConnectionsForItem,
 } from '../lib/supabase';
 import {
   isCloudflareAiConfigured,
@@ -103,6 +113,20 @@ interface NoesisContextType {
   projects: Project[];
   toggleProjectMilestone: (projectId: string, milestoneId: string) => void;
 
+  // Auth & Security
+  authUser: User | null;
+  authLoading: boolean;
+  offlineBypass: boolean;
+  enterOfflineMode: () => void;
+  refreshSupabaseConfig: () => void;
+  signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
+  signUp: (
+    email: string,
+    password: string
+  ) => Promise<{ ok: boolean; needsConfirmation?: boolean; error?: string }>;
+  signOut: () => Promise<void>;
+  updatePassword: (newPassword: string) => Promise<{ ok: boolean; error?: string }>;
+
   // Supabase & Embedding Integration
   isSupabaseConnected: boolean;
   isCloudflareConnected: boolean;
@@ -133,7 +157,9 @@ interface NoesisContextType {
     analysis: ConnectionAnalysis
   ) => void;
   unlinkDiscoverConnection: (idA: string, idB: string) => void;
-  promoteFragmentToNote: (fragmentId: string) => string | null;
+  promoteFragmentToNote: (
+    fragmentId: string
+  ) => Promise<{ ok: boolean; noteId?: string; error?: string }>;
   resetDismissedConnections: () => void;
   performUnifiedSemanticSearch: (query: string, customThreshold?: number) => Promise<DiscoverSourceItem[]>;
   saveSynthesizedNote: (params: {
@@ -265,7 +291,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return INITIAL_PROJECTS;
   });
 
-  // Sync statuses
+  // Auth & Sync statuses
+  const [authUser, setAuthUser] = useState<User | null>(null);
+  const [authLoading, setAuthLoading] = useState<boolean>(() => isSupabaseConfigured());
+  const [offlineBypass, setOfflineBypass] = useState<boolean>(() => {
+    return localStorage.getItem('noesis_offline_bypass') === 'true';
+  });
+  const [supabaseConfigRev, setSupabaseConfigRev] = useState<number>(0);
+
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(isSupabaseConfigured());
   const [isCloudflareConnected, setIsCloudflareConnected] = useState<boolean>(isCloudflareAiConfigured());
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
@@ -273,6 +306,84 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Debounce refs for auto-embedding notes and already-embedded fragments
   const embedTimersRef = useRef<{ [noteId: string]: NodeJS.Timeout }>({});
   const fragEmbedTimersRef = useRef<{ [fragmentId: string]: NodeJS.Timeout }>({});
+
+  const refreshSupabaseConfig = () => {
+    resetSupabaseClientCache();
+    setIsSupabaseConnected(isSupabaseConfigured());
+    setOfflineBypass(false);
+    localStorage.removeItem('noesis_offline_bypass');
+    setSupabaseConfigRev((prev) => prev + 1);
+  };
+
+  const enterOfflineMode = () => {
+    setOfflineBypass(true);
+    localStorage.setItem('noesis_offline_bypass', 'true');
+  };
+
+  const clearLocalWorkspaceData = () => {
+    localStorage.removeItem('noesis_notes');
+    localStorage.removeItem('noesis_fragments');
+    localStorage.removeItem('noesis_relics');
+    localStorage.removeItem('noesis_dismissed_connections');
+    localStorage.removeItem('noesis_approved_connections');
+    localStorage.removeItem('noesis_discover_analyses');
+    localStorage.removeItem('noesis_discover_cluster_summaries');
+    localStorage.removeItem('noesis_auth_uid');
+    setNotes([]);
+    setFragments([]);
+    setApprovedConnections([]);
+    setDismissedConnections([]);
+    setConnectionAnalyses({});
+    setActiveNoteId('');
+  };
+
+  const signIn = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await signInWithEmailPassword(email, password);
+    if (res.error) {
+      return { ok: false, error: res.error };
+    }
+    setAuthUser(res.user);
+    setOfflineBypass(false);
+    localStorage.removeItem('noesis_offline_bypass');
+    return { ok: true };
+  };
+
+  const signUp = async (
+    email: string,
+    password: string
+  ): Promise<{ ok: boolean; needsConfirmation?: boolean; error?: string }> => {
+    const res = await signUpWithEmailPassword(email, password);
+    if (res.error) {
+      return { ok: false, error: res.error };
+    }
+    if (res.session && res.user) {
+      setAuthUser(res.user);
+      setOfflineBypass(false);
+      localStorage.removeItem('noesis_offline_bypass');
+    }
+    return { ok: true, needsConfirmation: res.needsEmailConfirmation };
+  };
+
+  const signOut = async () => {
+    await signOutFromSupabase();
+    clearLocalWorkspaceData();
+    setAuthUser(null);
+    setOfflineBypass(false);
+    localStorage.removeItem('noesis_offline_bypass');
+  };
+
+  const updatePassword = async (
+    newPassword: string
+  ): Promise<{ ok: boolean; error?: string }> => {
+    const res = await updateSupabasePassword(newPassword);
+    if (res.error) {
+      return { ok: false, error: res.error };
+    }
+    return { ok: true };
+  };
 
   // Sync entities to localStorage on state changes
   useEffect(() => {
@@ -288,11 +399,49 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     localStorage.setItem('noesis_projects', JSON.stringify(projects));
   }, [projects]);
 
-  // Initial Supabase Sync & Realtime Listeners
+  // Listen to Supabase Auth Session changes
   useEffect(() => {
-    if (!isSupabaseConfigured()) return;
+    if (!isSupabaseConfigured()) {
+      setAuthUser(null);
+      setAuthLoading(false);
+      setIsSupabaseConnected(false);
+      return;
+    }
 
     let isMounted = true;
+    setAuthLoading(true);
+    setIsSupabaseConnected(true);
+
+    getSupabaseSession().then((session) => {
+      if (!isMounted) return;
+      setAuthUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    const unsubscribeAuth = onSupabaseAuthStateChange((_event, session) => {
+      if (!isMounted) return;
+      setAuthUser(session?.user ?? null);
+      setAuthLoading(false);
+    });
+
+    return () => {
+      isMounted = false;
+      unsubscribeAuth();
+    };
+  }, [supabaseConfigRev]);
+
+  // Initial Supabase Sync & Realtime Listeners (only when authenticated)
+  useEffect(() => {
+    if (!isSupabaseConfigured() || !authUser?.id) return;
+
+    let isMounted = true;
+    const savedUid = localStorage.getItem('noesis_auth_uid');
+    const isDifferentUser = savedUid !== null && savedUid !== authUser.id;
+    if (isDifferentUser) {
+      clearLocalWorkspaceData();
+    }
+    localStorage.setItem('noesis_auth_uid', authUser.id);
+
     const applyDbDiscoverConnections = (dbConns: DiscoverConnectionRecord[], onlyIfNonEmpty = false) => {
       if (onlyIfNonEmpty && dbConns.length === 0) return;
 
@@ -322,8 +471,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         if (dbNotes !== null && isMounted) {
           setNotes(dbNotes);
-          if (dbNotes.length > 0 && !activeNoteId) {
-            setActiveNoteId(dbNotes[0].id);
+          if (dbNotes.length > 0) {
+            setActiveNoteId((prevId) => prevId || dbNotes[0].id);
           }
         }
 
@@ -332,7 +481,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
 
         if (dbDiscoverConns !== null && isMounted) {
-          applyDbDiscoverConnections(dbDiscoverConns, true);
+          applyDbDiscoverConnections(dbDiscoverConns, !isDifferentUser && savedUid === authUser.id);
         }
 
         setIsSupabaseConnected(true);
@@ -369,7 +518,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       isMounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [authUser?.id, supabaseConfigRev]);
 
   const activeNote = useMemo(() => {
     return notes.find((n) => n.id === activeNoteId) || notes[0];
@@ -932,10 +1081,35 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
-  const promoteFragmentToNote = (fragmentId: string): string | null => {
+  const promoteFragmentToNote = async (
+    fragmentId: string
+  ): Promise<{ ok: boolean; noteId?: string; error?: string }> => {
     const frag = fragments.find((f) => f.id === fragmentId);
-    if (!frag) return null;
+    if (!frag) {
+      return { ok: false, error: 'Fragment tidak ditemukan.' };
+    }
 
+    const pairMatchesFragment = (pairKey: string) => {
+      const parts = pairKey.split('::');
+      return parts.length === 2 && (parts[0] === frag.id || parts[1] === frag.id);
+    };
+
+    // 1. Collect all approved relations (Notes -> relatedNoteIds, Fragments -> discover_connections)
+    const connectedIds = new Set<string>();
+    for (const pairKey of approvedConnections) {
+      const parts = pairKey.split('::');
+      if (parts.length !== 2) continue;
+      if (parts[0] === frag.id) connectedIds.add(parts[1]);
+      else if (parts[1] === frag.id) connectedIds.add(parts[0]);
+    }
+
+    const connectedNotes = notes.filter((n) => !n.archived && connectedIds.has(n.id));
+    const connectedNoteIds = connectedNotes.map((n) => n.id);
+    const connectedFragments = fragments.filter(
+      (f) => f.id !== frag.id && connectedIds.has(f.id)
+    );
+
+    // 2. Convert plain text Fragment content into clean Tiptap HTML paragraphs
     const escapeHtml = (str: string) =>
       str
         .replace(/&/g, '&amp;')
@@ -954,36 +1128,172 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const newId = `note-${Date.now()}`;
     const now = new Date().toISOString();
 
+    let copiedEmbedding: number[] | undefined;
+    let resolvedEmbeddedAt: string | undefined;
+
+    // 3. Commit-First in Supabase (if configured) before touching local state or deleting old Fragment
+    if (isSupabaseConfigured()) {
+      if (frag.embeddedAt) {
+        const embedRes = await fetchFragmentEmbeddingById(frag.id);
+        if (!embedRes.ok) {
+          return {
+            ok: false,
+            error:
+              'Gagal mengambil vector embedding dari Supabase. Fragment asli tetap aman dan tidak dihapus.',
+          };
+        }
+        if (embedRes.embedding) {
+          copiedEmbedding = embedRes.embedding;
+          resolvedEmbeddedAt = embedRes.embeddedAt || frag.embeddedAt || now;
+        }
+      }
+    }
+
     const newNote: Note = {
       id: newId,
       title: frag.title || 'Untitled Note',
       content: htmlContent,
       excerpt: plainText.slice(0, 180),
       type: frag.type || 'thought',
-      tags: frag.tags && frag.tags.length > 0 ? [...frag.tags] : ['fragment'],
-      source: frag.source || `Dikembangkan dari Fragment: ${frag.title}`,
+      tags: frag.tags && frag.tags.length > 0 ? [...frag.tags] : [],
+      source: frag.source || undefined,
       favorite: Boolean(frag.starred),
       archived: false,
-      relatedNoteIds: [],
+      relatedNoteIds: connectedNoteIds,
       createdAt: now,
       updatedAt: now,
+      embeddedAt: resolvedEmbeddedAt,
     };
 
-    setNotes((prev) => [newNote, ...prev]);
+    const migratedFragmentConnections: {
+      linkedFrag: Fragment;
+      newPairKey: string;
+      analysis?: ConnectionAnalysis;
+    }[] = connectedFragments.map((linkedFrag) => {
+      const oldPairKey = makePairKey(frag.id, linkedFrag.id);
+      const newPairKey = makePairKey(newNote.id, linkedFrag.id);
+      return {
+        linkedFrag,
+        newPairKey,
+        analysis: connectionAnalyses[oldPairKey],
+      };
+    });
 
     if (isSupabaseConfigured()) {
-      embedAndSyncNote(newNote).catch(() => {
-        upsertNoteToSupabase(newNote).catch(console.warn);
-      });
+      // Cancel any pending auto-embed timer on the fragment so it won't race
+      if (fragEmbedTimersRef.current[frag.id]) {
+        clearTimeout(fragEmbedTimersRef.current[frag.id]);
+        delete fragEmbedTimersRef.current[frag.id];
+      }
+
+      // Step 3a: Insert new Note (with copied embedding vector if present)
+      const noteInserted = await upsertNoteToSupabase(newNote, copiedEmbedding);
+      if (!noteInserted) {
+        return {
+          ok: false,
+          error:
+            'Gagal menyalin data Note ke Supabase. Fragment asli tetap aman dan tidak dihapus.',
+        };
+      }
+
+      // Step 3b: Link relatedNoteIds bidirectionally on connected Notes in Supabase
+      for (const linkedNote of connectedNotes) {
+        if (!linkedNote.relatedNoteIds.includes(newNote.id)) {
+          const updatedLinkedNote: Note = {
+            ...linkedNote,
+            relatedNoteIds: [...linkedNote.relatedNoteIds, newNote.id],
+            updatedAt: now,
+          };
+          const linkedOk = await upsertNoteToSupabase(updatedLinkedNote);
+          if (!linkedOk) {
+            return {
+              ok: false,
+              error:
+                'Note baru berhasil dibuat, namun gagal menyalin relasi Note terkait di Supabase. Fragment lama dipertahankan agar aman.',
+            };
+          }
+        }
+      }
+
+      // Step 3c: Migrate connected Fragment links in discover_connections to new Note ID
+      const newNoteItem = noteToDiscoverItem(newNote);
+      for (const { linkedFrag, newPairKey, analysis } of migratedFragmentConnections) {
+        const fragItem = fragmentToDiscoverItem(linkedFrag);
+        const first = newNoteItem.id < fragItem.id ? newNoteItem : fragItem;
+        const second = newNoteItem.id < fragItem.id ? fragItem : newNoteItem;
+
+        const connOk = await upsertDiscoverConnectionToSupabase({
+          pairKey: newPairKey,
+          itemAId: first.id,
+          itemAKind: first.kind,
+          itemBId: second.id,
+          itemBKind: second.kind,
+          status: 'approved',
+          analysis,
+          updatedAt: now,
+        });
+
+        if (!connOk) {
+          return {
+            ok: false,
+            error:
+              'Note baru berhasil dibuat, namun gagal memindahkan koneksi Fragment di Supabase. Fragment lama dipertahankan agar aman.',
+          };
+        }
+      }
+
+      // Step 3d: Delete-Last — only now remove old discover_connections rows and old Fragment row
+      await deleteDiscoverConnectionsForItem(frag.id);
+      const fragDeleted = await deleteFragmentFromSupabase(frag.id);
+      if (!fragDeleted) {
+        return {
+          ok: false,
+          error:
+            'Note & seluruh relasi berhasil disalin ke Library, namun gagal menghapus Fragment lama dari Supabase.',
+        };
+      }
     }
 
-    // Link the promoted Note back to the source Fragment without removing the Fragment
-    approveConnection(noteToDiscoverItem(newNote), fragmentToDiscoverItem(frag));
+    // 4. All remote steps succeeded (or running offline): update React state atomically
+    setNotes((prev) => {
+      const updatedExisting = prev.map((n) => {
+        if (connectedNoteIds.includes(n.id) && !n.relatedNoteIds.includes(newId)) {
+          return { ...n, relatedNoteIds: [...n.relatedNoteIds, newId], updatedAt: now };
+        }
+        return n;
+      });
+      return [newNote, ...updatedExisting];
+    });
+
+    setApprovedConnections((prev) => {
+      const cleaned = prev.filter((k) => !pairMatchesFragment(k));
+      const added = migratedFragmentConnections.map((m) => m.newPairKey);
+      return Array.from(new Set([...cleaned, ...added]));
+    });
+
+    setDismissedConnections((prev) => prev.filter((k) => !pairMatchesFragment(k)));
+
+    setConnectionAnalyses((prev) => {
+      const next: Record<string, ConnectionAnalysis> = {};
+      for (const [k, v] of Object.entries(prev)) {
+        if (!pairMatchesFragment(k)) {
+          next[k] = v;
+        }
+      }
+      for (const { newPairKey, analysis } of migratedFragmentConnections) {
+        if (analysis) {
+          next[newPairKey] = analysis;
+        }
+      }
+      return next;
+    });
+
+    setFragments((prev) => prev.filter((f) => f.id !== frag.id));
 
     setActiveNoteId(newId);
     setActiveView('editor');
     closeFragmentDrawer();
-    return newId;
+    return { ok: true, noteId: newId };
   };
 
   const performUnifiedSemanticSearch = async (
@@ -1178,6 +1488,15 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         toggleStarRelic,
         projects,
         toggleProjectMilestone,
+        authUser,
+        authLoading,
+        offlineBypass,
+        enterOfflineMode,
+        refreshSupabaseConfig,
+        signIn,
+        signUp,
+        signOut,
+        updatePassword,
         isSupabaseConnected,
         isCloudflareConnected,
         syncStatus,
