@@ -1,7 +1,7 @@
 import { GoogleGenAI, Type, ThinkingLevel } from '@google/genai';
 
 export const PRIMARY_MODEL = 'gemini-4-hydrogen';
-export const FALLBACK_MODEL = 'gemini-3.1-flash-lite';
+export const FALLBACK_MODEL = 'gemini-3.5-flash-lite';
 export const RETRY_DELAY_MS = 2500;
 
 export class DiscoverApiError extends Error {
