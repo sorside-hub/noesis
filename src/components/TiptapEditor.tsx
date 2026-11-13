@@ -5,7 +5,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
 import { useNoesis } from '../context/NoesisContext';
-import { NoteType } from '../types';
+import { ManualNoteType, NoteType } from '../types';
 import {
   Bold,
   Italic,
@@ -39,6 +39,7 @@ import {
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { fetchAllVectorEmbeddings, VectorMapResult } from '../lib/supabase';
 import { computeRelatedNoteSuggestions } from '../lib/discoverAi';
+import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
 
 interface TiptapEditorProps {
   isFullScreen?: boolean;
@@ -62,6 +63,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     openFragmentDrawer,
     setActiveNoteId,
     setActiveView,
+    startUpdateSynthesis,
     createNote,
     manualEmbedNote,
     manualRemoveEmbedNote,
@@ -72,7 +74,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [title, setTitle] = useState(activeNote?.title || '');
   const [isEmbeddingLoading, setIsEmbeddingLoading] = useState(false);
   const [embedNotice, setEmbedNotice] = useState<string | null>(null);
+  const [isEditorFocused, setIsEditorFocused] = useState(false);
+  const isKeyboardOpen = useVirtualKeyboardOpen();
   const activeNoteIdRef = React.useRef(activeNote?.id);
+  const blurTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     activeNoteIdRef.current = activeNote?.id;
@@ -81,6 +86,9 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   // When switching notes or leaving the editor, if previous note was empty, discard it automatically
   useEffect(() => {
     return () => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
       if (activeNoteIdRef.current) {
         discardNoteIfEmpty(activeNoteIdRef.current);
       }
@@ -145,6 +153,23 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
         class:
           'prose dark:prose-invert max-w-none focus:outline-none min-h-[460px] text-[16px] leading-[1.85] text-[#292524] dark:text-[#E7E5E4] font-normal selection:bg-[#9A3412]/15 selection:text-[#9A3412] dark:selection:bg-[#C2410C]/30 dark:selection:text-[#FDBA74]',
       },
+    },
+    onFocus: () => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+        blurTimeoutRef.current = null;
+      }
+      setIsEditorFocused(true);
+    },
+    onBlur: ({ editor: ed }) => {
+      if (blurTimeoutRef.current) {
+        clearTimeout(blurTimeoutRef.current);
+      }
+      blurTimeoutRef.current = setTimeout(() => {
+        if (!ed.isDestroyed && !ed.isFocused) {
+          setIsEditorFocused(false);
+        }
+      }, 120);
     },
     onUpdate: ({ editor }) => {
       if (activeNote) {
@@ -258,8 +283,8 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     updateNote(activeNote.id, { source: sourceInput.trim() || undefined });
   };
 
-  const handleTypeChange = (newType: NoteType) => {
-    if (!activeNote) return;
+  const handleTypeChange = (newType: ManualNoteType) => {
+    if (!activeNote || activeNote.type === 'synthesis') return;
     updateNote(activeNote.id, { type: newType });
   };
 
@@ -348,6 +373,8 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
         return 'text-[#9A3412] dark:text-[#EA580C] bg-[#FED7AA]/30 dark:bg-[#431407]/40 border-[#FED7AA] dark:border-[#431407]';
       case 'idea':
         return 'text-[#B45309] dark:text-[#F59E0B] bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50';
+      case 'synthesis':
+        return 'text-[#6D28D9] dark:text-[#A78BFA] bg-violet-50 dark:bg-violet-950/40 border-violet-200 dark:border-violet-900/50';
     }
   };
 
@@ -379,11 +406,12 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
             <span className="text-[#9C9388]">/</span>
 
             <span
-              className={`text-[10px] uppercase font-mono tracking-wider px-2 py-0.5 rounded border ${getTypeStyle(
+              className={`inline-flex items-center gap-1 text-[10px] uppercase font-mono tracking-wider px-2 py-0.5 rounded border ${getTypeStyle(
                 activeNote.type || 'thought'
               )}`}
             >
-              {activeNote.type || 'thought'}
+              {activeNote.type === 'synthesis' && <Sparkles size={10} />}
+              <span>{activeNote.type || 'thought'}</span>
             </span>
           </div>
 
@@ -471,6 +499,19 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                     Document Actions
                   </div>
 
+                  {activeNote.type === 'synthesis' && (
+                    <button
+                      onClick={() => {
+                        setShowActionMenu(false);
+                        startUpdateSynthesis(activeNote.id);
+                      }}
+                      className="w-full px-3 py-1.5 text-xs flex items-center gap-2 text-[#6D28D9] dark:text-[#A78BFA] hover:bg-violet-50 dark:hover:bg-violet-950/30 text-left transition-colors font-medium"
+                    >
+                      <Sparkles size={14} />
+                      <span>Perbarui Sintesis</span>
+                    </button>
+                  )}
+
                   <button
                     onClick={() => {
                       toggleArchiveNote(activeNote.id);
@@ -537,145 +578,205 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           </div>
         )}
 
-        {/* Minimal Formatting Toolbar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 py-2 border-b border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 bg-[#F5EFEB]/50 dark:bg-[#1E1C1A]/50 shrink-0 overflow-x-auto">
-          <div className="flex items-center gap-1 bg-white/70 dark:bg-[#272422]/70 border border-[#E8E2D8] dark:border-[#332F2C] rounded-lg p-0.5 shadow-xs">
-            <button
-              onClick={() => editor.chain().focus().toggleBold().run()}
-              aria-label="Bold"
-              className={`p-1.5 rounded text-xs font-semibold transition-colors ${
-                editor.isActive('bold')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <Bold size={14} />
-            </button>
-            <button
-              onClick={() => editor.chain().focus().toggleItalic().run()}
-              aria-label="Italic"
-              className={`p-1.5 rounded text-xs transition-colors ${
-                editor.isActive('italic')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <Italic size={14} />
-            </button>
-            <button
-              onClick={() => editor.chain().focus().toggleUnderline().run()}
-              aria-label="Underline"
-              className={`p-1.5 rounded text-xs transition-colors ${
-                editor.isActive('underline')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <UnderlineIcon size={14} />
-            </button>
+        {/* Desktop Minimal Formatting Toolbar (Hidden on Mobile) */}
+        {(() => {
+          const btnPadding = 'p-1.5';
+          const mobileBtnPadding = 'p-2 shrink-0';
+          const keepFocus = (e: React.MouseEvent) => e.preventDefault();
+          const renderToolbarButtons = (isMobileBar: boolean) => {
+            const pad = isMobileBar ? mobileBtnPadding : btnPadding;
+            const iconSize = isMobileBar ? 16 : 14;
+            return (
+              <>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleBold().run()}
+                  aria-label="Bold"
+                  className={`${pad} rounded text-xs font-semibold transition-colors ${
+                    editor.isActive('bold')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <Bold size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleItalic().run()}
+                  aria-label="Italic"
+                  className={`${pad} rounded text-xs transition-colors ${
+                    editor.isActive('italic')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <Italic size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleUnderline().run()}
+                  aria-label="Underline"
+                  className={`${pad} rounded text-xs transition-colors ${
+                    editor.isActive('underline')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <UnderlineIcon size={iconSize} />
+                </button>
 
-            <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1" />
+                <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
 
-            <button
-              onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
-              aria-label="Heading 1"
-              className={`p-1.5 rounded text-xs font-serif transition-colors ${
-                editor.isActive('heading', { level: 1 })
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <Heading1 size={14} />
-            </button>
-            <button
-              onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
-              aria-label="Heading 2"
-              className={`p-1.5 rounded text-xs font-serif transition-colors ${
-                editor.isActive('heading', { level: 2 })
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <Heading2 size={14} />
-            </button>
-            <button
-              onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
-              aria-label="Heading 3"
-              className={`p-1.5 rounded text-xs font-serif transition-colors ${
-                editor.isActive('heading', { level: 3 })
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <Heading3 size={14} />
-            </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()}
+                  aria-label="Heading 1"
+                  className={`${pad} rounded text-xs font-serif transition-colors ${
+                    editor.isActive('heading', { level: 1 })
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <Heading1 size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()}
+                  aria-label="Heading 2"
+                  className={`${pad} rounded text-xs font-serif transition-colors ${
+                    editor.isActive('heading', { level: 2 })
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <Heading2 size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()}
+                  aria-label="Heading 3"
+                  className={`${pad} rounded text-xs font-serif transition-colors ${
+                    editor.isActive('heading', { level: 3 })
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <Heading3 size={iconSize} />
+                </button>
 
-            <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1" />
+                <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
 
-            <button
-              onClick={() => editor.chain().focus().toggleBlockquote().run()}
-              aria-label="Blockquote"
-              className={`p-1.5 rounded text-xs transition-colors ${
-                editor.isActive('blockquote')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <Quote size={14} />
-            </button>
-            <button
-              onClick={() => editor.chain().focus().toggleBulletList().run()}
-              aria-label="Bullet list"
-              className={`p-1.5 rounded text-xs transition-colors ${
-                editor.isActive('bulletList')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <List size={14} />
-            </button>
-            <button
-              onClick={() => editor.chain().focus().toggleOrderedList().run()}
-              aria-label="Numbered list"
-              className={`p-1.5 rounded text-xs transition-colors ${
-                editor.isActive('orderedList')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <ListOrdered size={14} />
-            </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleBlockquote().run()}
+                  aria-label="Blockquote"
+                  className={`${pad} rounded text-xs transition-colors ${
+                    editor.isActive('blockquote')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <Quote size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleBulletList().run()}
+                  aria-label="Bullet list"
+                  className={`${pad} rounded text-xs transition-colors ${
+                    editor.isActive('bulletList')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <List size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().toggleOrderedList().run()}
+                  aria-label="Numbered list"
+                  className={`${pad} rounded text-xs transition-colors ${
+                    editor.isActive('orderedList')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <ListOrdered size={iconSize} />
+                </button>
 
-            <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1" />
+                <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
 
-            <button
-              onClick={() => setShowLinkDialog(true)}
-              aria-label="Add link"
-              className={`p-1.5 rounded text-xs transition-colors ${
-                editor.isActive('link')
-                  ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
-                  : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
-              }`}
-            >
-              <LinkIcon size={14} />
-            </button>
-            <button
-              onClick={() => setShowImageDialog(true)}
-              aria-label="Insert image"
-              className="p-1.5 rounded text-xs text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C] transition-colors"
-            >
-              <ImageIcon size={14} />
-            </button>
-          </div>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => setShowLinkDialog(true)}
+                  aria-label="Add link"
+                  className={`${pad} rounded text-xs transition-colors ${
+                    editor.isActive('link')
+                      ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413]'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C]'
+                  }`}
+                >
+                  <LinkIcon size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => setShowImageDialog(true)}
+                  aria-label="Insert image"
+                  className={`${pad} rounded text-xs text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C] transition-colors`}
+                >
+                  <ImageIcon size={iconSize} />
+                </button>
+              </>
+            );
+          };
 
-          <div className="hidden md:flex items-center gap-2 text-[11px] text-[#9C9388] dark:text-[#736C62] font-mono">
-            <span>Auto-saved</span>
-          </div>
-        </div>
+          const showMobileToolbar =
+            isKeyboardOpen &&
+            isEditorFocused &&
+            !showMobileInspector &&
+            !showLinkDialog &&
+            !showImageDialog;
+
+          return (
+            <>
+              <div className="hidden md:flex items-center justify-between px-4 sm:px-6 py-2 border-b border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 bg-[#F5EFEB]/50 dark:bg-[#1E1C1A]/50 shrink-0 overflow-x-auto">
+                <div className="flex items-center gap-1 bg-white/70 dark:bg-[#272422]/70 border border-[#E8E2D8] dark:border-[#332F2C] rounded-lg p-0.5 shadow-xs">
+                  {renderToolbarButtons(false)}
+                </div>
+
+                <div className="hidden md:flex items-center gap-2 text-[11px] text-[#9C9388] dark:text-[#736C62] font-mono">
+                  <span>Auto-saved</span>
+                </div>
+              </div>
+
+              {showMobileToolbar && (
+                <div
+                  className="md:hidden fixed left-0 right-0 bottom-[var(--noesis-kb-offset,0px)] z-40 bg-[#F5EFEB]/95 dark:bg-[#1E1C1A]/95 backdrop-blur-md border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2.5 py-1.5 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150"
+                  role="toolbar"
+                  aria-label="Editor formatting toolbar"
+                >
+                  <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+                    {renderToolbarButtons(true)}
+                  </div>
+                </div>
+              )}
+            </>
+          );
+        })()}
 
         {/* Link Dialog Modal */}
         {showLinkDialog && (
-          <div className="absolute top-24 left-1/2 -translate-x-1/2 z-20 w-80 p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
+          <div className="absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 w-[min(20rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
             <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-2">Insert Web Hyperlink</p>
             <input
               type="url"
@@ -703,7 +804,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
 
         {/* Image Plate Modal */}
         {showImageDialog && (
-          <div className="absolute top-24 left-1/2 -translate-x-1/2 z-20 w-88 p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
+          <div className="absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 w-[min(22rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
             <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-1">Insert Archival Visual Plate</p>
             <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196] mb-2">
               Add a study illustration or photograph figure placeholder into this essay.
@@ -778,21 +879,43 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
                 Note Type
               </label>
-              <div className="grid grid-cols-3 gap-1.5 p-1 bg-white dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
-                {(['thought', 'reference', 'idea'] as NoteType[]).map((t) => (
+              {activeNote.type === 'synthesis' ? (
+                <div className="space-y-2">
+                  <div className="p-2.5 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/50 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
+                      <Sparkles size={12} />
+                      <span>Synthesis</span>
+                    </span>
+                    <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
+                      Otomatis dari Discover
+                    </span>
+                  </div>
                   <button
-                    key={t}
-                    onClick={() => handleTypeChange(t)}
-                    className={`py-1.5 px-2 text-xs font-mono uppercase tracking-wider rounded-lg transition-colors ${
-                      activeNote.type === t
-                        ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413] shadow-xs'
-                        : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2]'
-                    }`}
+                    type="button"
+                    onClick={() => startUpdateSynthesis(activeNote.id)}
+                    className="w-full py-2 px-3 rounded-xl bg-[#6D28D9] dark:bg-[#7C3AED] text-white text-xs font-medium hover:bg-[#5B21B6] dark:hover:bg-[#6D28D9] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
                   >
-                    {t}
+                    <Sparkles size={13} />
+                    <span>Perbarui dengan Materi Baru</span>
                   </button>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-1.5 p-1 bg-white dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                  {(['thought', 'reference', 'idea'] as ManualNoteType[]).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => handleTypeChange(t)}
+                      className={`py-1.5 px-2 text-xs font-mono uppercase tracking-wider rounded-lg transition-colors ${
+                        activeNote.type === t
+                          ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413] shadow-xs'
+                          : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2]'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 2. Source / Provenance */}
@@ -1119,21 +1242,46 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
                 Note Type
               </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['thought', 'reference', 'idea'] as NoteType[]).map((t) => (
+              {activeNote.type === 'synthesis' ? (
+                <div className="space-y-2">
+                  <div className="p-2.5 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/50 flex items-center justify-between gap-2">
+                    <span className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
+                      <Sparkles size={12} />
+                      <span>Synthesis</span>
+                    </span>
+                    <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
+                      Otomatis dari Discover
+                    </span>
+                  </div>
                   <button
-                    key={t}
-                    onClick={() => handleTypeChange(t)}
-                    className={`py-2 text-xs font-mono uppercase tracking-wider rounded-xl border text-center ${
-                      activeNote.type === t
-                        ? 'border-[#9A3412] bg-[#9A3412] text-white'
-                        : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]'
-                    }`}
+                    type="button"
+                    onClick={() => {
+                      setShowMobileInspector(false);
+                      startUpdateSynthesis(activeNote.id);
+                    }}
+                    className="w-full py-2.5 px-3 rounded-xl bg-[#6D28D9] dark:bg-[#7C3AED] text-white text-xs font-medium hover:bg-[#5B21B6] dark:hover:bg-[#6D28D9] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
                   >
-                    {t}
+                    <Sparkles size={13} />
+                    <span>Perbarui dengan Materi Baru</span>
                   </button>
-                ))}
-              </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-3 gap-2">
+                  {(['thought', 'reference', 'idea'] as ManualNoteType[]).map((t) => (
+                    <button
+                      key={t}
+                      onClick={() => handleTypeChange(t)}
+                      className={`py-2 text-xs font-mono uppercase tracking-wider rounded-xl border text-center ${
+                        activeNote.type === t
+                          ? 'border-[#9A3412] bg-[#9A3412] text-white'
+                          : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]'
+                      }`}
+                    >
+                      {t}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
 
             {/* 2. Source */}

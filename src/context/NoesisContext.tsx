@@ -8,6 +8,7 @@ import {
   Project,
   RelicType,
   FragmentType,
+  ManualNoteType,
   NoteType,
   StreamFilter,
   DiscoverSourceItem,
@@ -18,7 +19,6 @@ import { INITIAL_NOTES, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } fr
 import type { User } from '@supabase/supabase-js';
 import {
   isSupabaseConfigured,
-  resetSupabaseClientCache,
   getSupabaseSession,
   onSupabaseAuthStateChange,
   signInWithEmailPassword,
@@ -52,7 +52,25 @@ import {
   makePairKey,
   noteToDiscoverItem,
   fragmentToDiscoverItem,
+  stripSynthesisSourcesFooter,
 } from '../lib/discoverAi';
+import {
+  loadPendingSyncQueue,
+  clearPendingSyncQueue,
+  hasPendingSyncItems,
+  enqueueUpsertNote,
+  dequeueUpsertNote,
+  enqueueDeleteNote,
+  dequeueDeleteNote,
+  enqueueUpsertFragment,
+  dequeueUpsertFragment,
+  enqueueDeleteFragment,
+  dequeueDeleteFragment,
+  enqueueUpsertConnection,
+  dequeueUpsertConnection,
+  enqueueDeleteConnection,
+  dequeueDeleteConnection,
+} from '../lib/offlineSyncQueue';
 
 interface NoesisContextType {
   // Theme
@@ -84,7 +102,7 @@ interface NoesisContextType {
   // Notes
   notes: Note[];
   activeNote: Note | undefined;
-  createNote: (type?: NoteType) => string;
+  createNote: (type?: ManualNoteType) => string;
   updateNote: (id: string, updates: Partial<Note>) => void;
   deleteNote: (id: string) => void;
   discardNoteIfEmpty: (id: string) => boolean;
@@ -118,7 +136,13 @@ interface NoesisContextType {
   authLoading: boolean;
   offlineBypass: boolean;
   enterOfflineMode: () => void;
-  refreshSupabaseConfig: () => void;
+  exitOfflineMode: () => void;
+  safetyModalAction: 'offline-logout' | 'wipe-local-exit' | 'reset-workspace' | null;
+  closeSafetyModal: () => void;
+  confirmSafetyAction: () => Promise<void>;
+  requestSignOut: () => void;
+  requestWipeLocalExit: () => void;
+  requestResetWorkspace: () => void;
   signIn: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>;
   signUp: (
     email: string,
@@ -163,13 +187,23 @@ interface NoesisContextType {
   ) => Promise<{ ok: boolean; noteId?: string; error?: string }>;
   resetDismissedConnections: () => void;
   performUnifiedSemanticSearch: (query: string, customThreshold?: number) => Promise<DiscoverSourceItem[]>;
+  synthesisTargetNoteId: string | null;
+  startUpdateSynthesis: (noteId: string) => void;
+  clearSynthesisTarget: () => void;
   saveSynthesizedNote: (params: {
     title: string;
     htmlContent: string;
     tags: string[];
     sourceItems: DiscoverSourceItem[];
-    type?: NoteType;
   }) => string;
+  updateSynthesizedNote: (params: {
+    targetNoteId: string;
+    title: string;
+    htmlContent: string;
+    tags: string[];
+    newSourceItems: DiscoverSourceItem[];
+    allResolvedSourceItems: DiscoverSourceItem[];
+  }) => boolean;
 }
 
 const NoesisContext = createContext<NoesisContextType | undefined>(undefined);
@@ -224,7 +258,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   // Views & Filter state
-  const [activeView, setActiveView] = useState<ViewMode>('editor');
+  const [activeView, setActiveView] = useState<ViewMode>('home');
   const [activeStreamFilter, setActiveStreamFilter] = useState<StreamFilter>('all');
   const [activeNoteId, setActiveNoteId] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -234,6 +268,16 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isQuickCaptureOpen, setIsQuickCaptureOpen] = useState<boolean>(false);
   const [activeFragmentId, setActiveFragmentId] = useState<string | null>(null);
   const [isFragmentDrawerOpen, setIsFragmentDrawerOpen] = useState<boolean>(false);
+  const [synthesisTargetNoteId, setSynthesisTargetNoteId] = useState<string | null>(null);
+
+  const startUpdateSynthesis = (noteId: string) => {
+    setSynthesisTargetNoteId(noteId);
+    setActiveView('discover');
+  };
+
+  const clearSynthesisTarget = () => {
+    setSynthesisTargetNoteId(null);
+  };
 
   // Backward compatibility alias for activeNotebookId
   const activeNotebookId = activeStreamFilter === 'all' ? null : activeStreamFilter;
@@ -298,7 +342,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [offlineBypass, setOfflineBypass] = useState<boolean>(() => {
     return localStorage.getItem('noesis_offline_bypass') === 'true';
   });
-  const [supabaseConfigRev, setSupabaseConfigRev] = useState<number>(0);
+  const [safetyModalAction, setSafetyModalAction] = useState<
+    'offline-logout' | 'wipe-local-exit' | 'reset-workspace' | null
+  >(null);
 
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(isSupabaseConfigured());
   const [isCloudflareConnected, setIsCloudflareConnected] = useState<boolean>(isCloudflareAiConfigured());
@@ -316,8 +362,29 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   notesRef.current = notes;
   const fragmentsRef = useRef<Fragment[]>(fragments);
   fragmentsRef.current = fragments;
+  const isReconcilingRef = useRef<boolean>(false);
+  const rerunReconcileRef = useRef<boolean>(false);
 
   const canRemoteSync = () => isSupabaseConfigured() && Boolean(authUserRef.current);
+
+  const isBrowserOnline = () =>
+    typeof navigator === 'undefined' ? true : navigator.onLine;
+
+  const syncNoteWithFallback = async (note: Note): Promise<boolean> => {
+    if (!canRemoteSync() || !isBrowserOnline()) return false;
+    const embeddedOk = await embedAndSyncNote(note);
+    if (embeddedOk) return true;
+    return await upsertNoteToSupabase(note);
+  };
+
+  const syncFragmentWithFallback = async (frag: Fragment): Promise<boolean> => {
+    if (!canRemoteSync() || !isBrowserOnline()) return false;
+    if (frag.embeddedAt) {
+      const embeddedOk = await embedAndSyncFragment(frag);
+      if (embeddedOk) return true;
+    }
+    return await upsertFragmentToSupabase(frag);
+  };
 
   const markOfflineDirtyIfLoggedOut = () => {
     if (!authUserRef.current) {
@@ -325,26 +392,24 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
-  const refreshSupabaseConfig = () => {
-    resetSupabaseClientCache();
-    setIsSupabaseConnected(isSupabaseConfigured());
-    setOfflineBypass(false);
-    localStorage.removeItem('noesis_offline_bypass');
-    setSupabaseConfigRev((prev) => prev + 1);
-  };
-
   const enterOfflineMode = () => {
     setOfflineBypass(true);
     localStorage.setItem('noesis_offline_bypass', 'true');
   };
 
-  const clearLocalWorkspaceData = (wipeAuthTokens = false) => {
+  const exitOfflineMode = () => {
+    setOfflineBypass(false);
+    localStorage.removeItem('noesis_offline_bypass');
+    setIsMobileDrawerOpen(false);
+  };
+
+  const clearLocalContentOnly = () => {
     Object.values(embedTimersRef.current).forEach((t) => clearTimeout(t));
     embedTimersRef.current = {};
     Object.values(fragEmbedTimersRef.current).forEach((t) => clearTimeout(t));
     fragEmbedTimersRef.current = {};
 
-    const keysToRemove = [
+    const contentKeys = [
       'noesis_notes',
       'noesis_fragments',
       'noesis_relics',
@@ -353,11 +418,38 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       'noesis_approved_connections',
       'noesis_discover_analyses',
       'noesis_discover_cluster_summaries',
-      'noesis_auth_uid',
       'noesis_offline_dirty',
-      'noesis_offline_bypass',
     ];
-    keysToRemove.forEach((k) => localStorage.removeItem(k));
+    contentKeys.forEach((k) => localStorage.removeItem(k));
+    clearPendingSyncQueue();
+
+    setNotes([]);
+    setFragments([]);
+    setProjects([]);
+    setApprovedConnections([]);
+    setDismissedConnections([]);
+    setConnectionAnalyses({});
+    setActiveNoteId('');
+    setActiveFragmentId(null);
+    setIsFragmentDrawerOpen(false);
+    setIsQuickCaptureOpen(false);
+    setSearchQuery('');
+    setSelectedTag(null);
+    setActiveView('home');
+  };
+
+  const clearLocalWorkspaceData = (wipeAuthTokens = false) => {
+    clearLocalContentOnly();
+
+    const metaAndLegacyKeys = [
+      'noesis_auth_uid',
+      'noesis_offline_bypass',
+      'noesis_supabase_url',
+      'noesis_supabase_anon_key',
+      'noesis_cf_account_id',
+      'noesis_cf_api_token',
+    ];
+    metaAndLegacyKeys.forEach((k) => localStorage.removeItem(k));
 
     if (wipeAuthTokens) {
       try {
@@ -372,20 +464,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         // Ignore storage access errors
       }
     }
-
-    setNotes([]);
-    setFragments([]);
-    setProjects([]);
-    setApprovedConnections([]);
-    setDismissedConnections([]);
-    setConnectionAnalyses({});
-    setActiveNoteId('');
-    setActiveFragmentId(null);
-    setIsFragmentDrawerOpen(false);
-    setIsQuickCaptureOpen(false);
-    setSearchQuery('');
-    setSelectedTag(null);
-    setActiveView('editor');
   };
 
   const signIn = async (
@@ -424,6 +502,48 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setAuthUser(null);
     setOfflineBypass(false);
     setAutoSyncNotice(null);
+    setIsMobileDrawerOpen(false);
+  };
+
+  const requestSignOut = () => {
+    if (!authUserRef.current) {
+      exitOfflineMode();
+      return;
+    }
+    const isOnline = typeof navigator === 'undefined' ? true : navigator.onLine;
+    if (!isOnline) {
+      setSafetyModalAction('offline-logout');
+      return;
+    }
+    void signOut();
+  };
+
+  const requestWipeLocalExit = () => {
+    setSafetyModalAction('wipe-local-exit');
+  };
+
+  const requestResetWorkspace = () => {
+    setSafetyModalAction('reset-workspace');
+  };
+
+  const closeSafetyModal = () => {
+    setSafetyModalAction(null);
+  };
+
+  const confirmSafetyAction = async () => {
+    const action = safetyModalAction;
+    setSafetyModalAction(null);
+    if (action === 'offline-logout') {
+      await signOut();
+    } else if (action === 'wipe-local-exit') {
+      clearLocalWorkspaceData(true);
+      setAuthUser(null);
+      setOfflineBypass(false);
+      setAutoSyncNotice(null);
+      setIsMobileDrawerOpen(false);
+    } else if (action === 'reset-workspace') {
+      clearLocalContentOnly();
+    }
   };
 
   const updatePassword = async (
@@ -492,18 +612,19 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       isMounted = false;
       unsubscribeAuth();
     };
-  }, [supabaseConfigRev]);
+  }, []);
 
-  // Initial Supabase Sync & Realtime Listeners (only when authenticated)
+  // Initial Supabase Sync, Logged-In Offline Outbox Reconciliation & Realtime Listeners
   useEffect(() => {
     if (!isSupabaseConfigured() || !authUser?.id) return;
 
+    const uid = authUser.id;
     let isMounted = true;
     const savedUid = localStorage.getItem('noesis_auth_uid');
-    const isDifferentUser = savedUid !== null && savedUid !== authUser.id;
+    const isDifferentUser = savedUid !== null && savedUid !== uid;
     const hasOfflineDirtyFlag = localStorage.getItem('noesis_offline_dirty') === 'true';
 
-    // Snapshot any offline drafts before potential state transitions
+    // Snapshot any unauthenticated offline drafts before potential state transitions
     const offlineNotesSnapshot = notesRef.current;
     const offlineFragmentsSnapshot = fragmentsRef.current;
     const offlineApprovedSnapshot = approvedRef.current;
@@ -521,9 +642,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (isDifferentUser && !hasOfflineDirtyFlag) {
       clearLocalWorkspaceData();
     }
-    localStorage.setItem('noesis_auth_uid', authUser.id);
+    localStorage.setItem('noesis_auth_uid', uid);
 
-    const applyDbDiscoverConnections = (dbConns: DiscoverConnectionRecord[], onlyIfNonEmpty = false) => {
+    const applyDbDiscoverConnections = (
+      dbConns: DiscoverConnectionRecord[],
+      onlyIfNonEmpty = false
+    ) => {
       if (onlyIfNonEmpty && dbConns.length === 0) return;
 
       const dbApproved = dbConns.filter((c) => c.status === 'approved').map((c) => c.pairKey);
@@ -542,7 +666,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
     };
 
-    const pushOfflineDataBeforePull = async () => {
+    const pushUnauthenticatedDraftsIfAny = async () => {
       if (!hasOfflineDrafts) return;
       setSyncStatus('syncing');
       let pushedNotes = 0;
@@ -610,58 +734,305 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
     };
 
-    const initSupabaseSync = async () => {
-      try {
-        await pushOfflineDataBeforePull();
+    // Strict Choice A Reconciliation: Flush pending outbox queue against Supabase truth, then pull final truth
+    const flushPendingOutbox = async (): Promise<number> => {
+      const queue = loadPendingSyncQueue(uid);
+      if (!hasPendingSyncItems(queue)) return 0;
 
+      // 1. Fetch current server truth first for strict server/timestamp conflict checks
+      const [serverNotes, serverFragments, serverConns] = await Promise.all([
+        fetchNotesFromSupabase(),
+        fetchFragmentsFromSupabase(),
+        fetchDiscoverConnectionsFromSupabase(),
+      ]);
+
+      if (serverNotes === null || serverFragments === null || serverConns === null) {
+        // Still offline or unreachable -> leave queue untouched
+        throw new Error('Supabase unreachable during queue reconciliation');
+      }
+
+      const serverNotesMap = new Map(serverNotes.map((n) => [n.id, n]));
+      const serverFragsMap = new Map(serverFragments.map((f) => [f.id, f]));
+      const serverConnsMap = new Map(serverConns.map((c) => [c.pairKey, c]));
+
+      const localNotesMap = new Map(notesRef.current.map((n) => [n.id, n]));
+      const localFragsMap = new Map(fragmentsRef.current.map((f) => [f.id, f]));
+
+      let syncedCount = 0;
+
+      // 2. Process queued Deletes first
+      for (const noteId of [...queue.deleteNoteIds]) {
+        const ok = await deleteNoteFromSupabase(noteId);
+        if (ok) {
+          dequeueDeleteNote(uid, noteId);
+          serverNotesMap.delete(noteId);
+          syncedCount++;
+        }
+      }
+
+      for (const fragId of [...queue.deleteFragmentIds]) {
+        const ok = await deleteFragmentFromSupabase(fragId);
+        if (ok) {
+          dequeueDeleteFragment(uid, fragId);
+          serverFragsMap.delete(fragId);
+          syncedCount++;
+        }
+      }
+
+      for (const pairKey of [...queue.deleteConnectionPairKeys]) {
+        const ok = await unlinkDiscoverConnectionInSupabase(pairKey);
+        if (ok) {
+          dequeueDeleteConnection(uid, pairKey);
+          syncedCount++;
+        }
+      }
+
+      // 3. Process queued Note Upserts (Choice A: Supabase Mutlak / Server-Wins)
+      for (const [noteId, entry] of Object.entries(queue.upsertNotes)) {
+        const localNote = localNotesMap.get(noteId);
+        if (!localNote) {
+          dequeueUpsertNote(uid, noteId);
+          continue;
+        }
+
+        const serverNote = serverNotesMap.get(noteId);
+        if (!serverNote && !entry.isNew) {
+          // Deleted on another device while offline -> Supabase Mutlak wins (no zombie resurrection)
+          dequeueUpsertNote(uid, noteId, entry.updatedAt);
+          continue;
+        }
+
+        if (serverNote) {
+          const serverMs = Date.parse(serverNote.updatedAt || '') || 0;
+          const localMs = Date.parse(localNote.updatedAt || entry.updatedAt || '') || 0;
+          if (serverMs > localMs) {
+            // Another device saved a newer revision -> Supabase Mutlak wins
+            dequeueUpsertNote(uid, noteId, entry.updatedAt);
+            continue;
+          }
+        }
+
+        const ok = await syncNoteWithFallback(localNote);
+        if (ok) {
+          dequeueUpsertNote(uid, noteId, localNote.updatedAt);
+          serverNotesMap.set(localNote.id, localNote);
+          syncedCount++;
+        }
+      }
+
+      // 4. Process queued Fragment Upserts (Choice A: Respect server deletions)
+      for (const [fragId, entry] of Object.entries(queue.upsertFragments)) {
+        const localFrag = localFragsMap.get(fragId);
+        if (!localFrag) {
+          dequeueUpsertFragment(uid, fragId);
+          continue;
+        }
+
+        const serverFrag = serverFragsMap.get(fragId);
+        if (!serverFrag && !entry.isNew) {
+          // Deleted on another device while offline -> Supabase Mutlak wins
+          dequeueUpsertFragment(uid, fragId, entry.updatedAt);
+          continue;
+        }
+
+        const ok = await syncFragmentWithFallback(localFrag);
+        if (ok) {
+          dequeueUpsertFragment(uid, fragId, localFrag.updatedAt || entry.updatedAt);
+          serverFragsMap.set(localFrag.id, localFrag);
+          syncedCount++;
+        }
+      }
+
+      // 5. Process queued Discover Connections
+      const combinedItemMap = new Map<string, DiscoverSourceItem>();
+      serverNotesMap.forEach((n) => combinedItemMap.set(n.id, noteToDiscoverItem(n)));
+      serverFragsMap.forEach((f) => combinedItemMap.set(f.id, fragmentToDiscoverItem(f)));
+
+      for (const [pairKey, entry] of Object.entries(queue.upsertConnections)) {
+        const serverConn = serverConnsMap.get(pairKey);
+        if (serverConn) {
+          const serverMs = Date.parse(serverConn.updatedAt || '') || 0;
+          const localMs = Date.parse(entry.updatedAt || '') || 0;
+          if (serverMs > localMs) {
+            dequeueUpsertConnection(uid, pairKey, entry.updatedAt);
+            continue;
+          }
+        }
+
+        const [idA, idB] = pairKey.split('::');
+        const itemA = combinedItemMap.get(idA);
+        const itemB = combinedItemMap.get(idB);
+        if (!itemA || !itemB) {
+          dequeueUpsertConnection(uid, pairKey, entry.updatedAt);
+          continue;
+        }
+
+        const first = itemA.id < itemB.id ? itemA : itemB;
+        const second = itemA.id < itemB.id ? itemB : itemA;
+        const status = approvedRef.current.includes(pairKey)
+          ? 'approved'
+          : dismissedRef.current.includes(pairKey)
+          ? 'dismissed'
+          : 'pending';
+
+        const ok = await upsertDiscoverConnectionToSupabase({
+          pairKey,
+          itemAId: first.id,
+          itemAKind: first.kind,
+          itemBId: second.id,
+          itemBKind: second.kind,
+          status,
+          analysis: analysesRef.current[pairKey],
+          updatedAt: entry.updatedAt || new Date().toISOString(),
+        });
+        if (ok) {
+          dequeueUpsertConnection(uid, pairKey, entry.updatedAt);
+          syncedCount++;
+        }
+      }
+
+      return syncedCount;
+    };
+
+    const reconcileWithSupabase = async (
+      reason: 'init' | 'reconnect' | 'realtime' = 'init'
+    ) => {
+      if (!isMounted) return;
+      if (!isBrowserOnline()) {
+        setSyncStatus('offline');
+        return;
+      }
+      if (isReconcilingRef.current) {
+        rerunReconcileRef.current = true;
+        return;
+      }
+
+      isReconcilingRef.current = true;
+      setSyncStatus('syncing');
+
+      try {
+        if (reason === 'init') {
+          await pushUnauthenticatedDraftsIfAny();
+        }
+
+        const syncedQueuedCount = await flushPendingOutbox();
+
+        // Always pull fresh Supabase truth after flushing (Supabase Mutlak)
         const [dbNotes, dbFragments, dbDiscoverConns] = await Promise.all([
           fetchNotesFromSupabase(),
           fetchFragmentsFromSupabase(),
           fetchDiscoverConnectionsFromSupabase(),
         ]);
 
-        if (dbNotes !== null && isMounted) {
+        const remainingQueue = loadPendingSyncQueue(uid);
+
+        if (
+          dbNotes !== null &&
+          Object.keys(remainingQueue.upsertNotes).length === 0 &&
+          remainingQueue.deleteNoteIds.length === 0 &&
+          isMounted
+        ) {
           setNotes(dbNotes);
           if (dbNotes.length > 0) {
             setActiveNoteId((prevId) => prevId || dbNotes[0].id);
           }
         }
 
-        if (dbFragments !== null && isMounted) {
+        if (
+          dbFragments !== null &&
+          Object.keys(remainingQueue.upsertFragments).length === 0 &&
+          remainingQueue.deleteFragmentIds.length === 0 &&
+          isMounted
+        ) {
           setFragments(dbFragments);
         }
 
-        if (dbDiscoverConns !== null && isMounted) {
+        if (
+          dbDiscoverConns !== null &&
+          Object.keys(remainingQueue.upsertConnections).length === 0 &&
+          remainingQueue.deleteConnectionPairKeys.length === 0 &&
+          isMounted
+        ) {
           applyDbDiscoverConnections(
             dbDiscoverConns,
-            !hasOfflineDrafts && !isDifferentUser && savedUid === authUser.id
+            reason === 'init' && !hasOfflineDrafts && !isDifferentUser && savedUid === uid
           );
         }
 
-        setSyncStatus('synced');
+        if (syncedQueuedCount > 0 && reason === 'reconnect' && isMounted) {
+          setAutoSyncNotice(
+            `Perubahan offline (${syncedQueuedCount} item) otomatis tersinkron ke Supabase.`
+          );
+          setTimeout(() => {
+            setAutoSyncNotice(null);
+          }, 4000);
+        }
+
+        setSyncStatus(hasPendingSyncItems(remainingQueue) ? 'offline' : 'synced');
         setIsSupabaseConnected(true);
       } catch (err) {
-        console.warn('Initial Supabase sync failed, using offline cache:', err);
+        console.warn('Supabase reconciliation failed, keeping offline cache & queue:', err);
+        if (isMounted) setSyncStatus('offline');
+      } finally {
+        isReconcilingRef.current = false;
+        if (rerunReconcileRef.current && isMounted) {
+          rerunReconcileRef.current = false;
+          void reconcileWithSupabase('reconnect');
+        }
       }
     };
 
-    initSupabaseSync();
+    void reconcileWithSupabase('init');
 
-    // Subscribe to realtime changes
+    const handleOnline = () => {
+      void reconcileWithSupabase('reconnect');
+    };
+    const handleOffline = () => {
+      if (isMounted) setSyncStatus('offline');
+    };
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible' && isBrowserOnline()) {
+        const q = loadPendingSyncQueue(uid);
+        if (hasPendingSyncItems(q)) {
+          void reconcileWithSupabase('reconnect');
+        }
+      }
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    // Subscribe to realtime changes (if queue has pending items, reconcile queue first!)
     const unsubscribe = subscribeToRealtimeChanges(
       async () => {
+        const q = loadPendingSyncQueue(uid);
+        if (hasPendingSyncItems(q)) {
+          await reconcileWithSupabase('realtime');
+          return;
+        }
         const latestNotes = await fetchNotesFromSupabase();
         if (latestNotes !== null && isMounted) {
           setNotes(latestNotes);
         }
       },
       async () => {
+        const q = loadPendingSyncQueue(uid);
+        if (hasPendingSyncItems(q)) {
+          await reconcileWithSupabase('realtime');
+          return;
+        }
         const latestFragments = await fetchFragmentsFromSupabase();
         if (latestFragments !== null && isMounted) {
           setFragments(latestFragments);
         }
       },
       async () => {
+        const q = loadPendingSyncQueue(uid);
+        if (hasPendingSyncItems(q)) {
+          await reconcileWithSupabase('realtime');
+          return;
+        }
         const latestConns = await fetchDiscoverConnectionsFromSupabase();
         if (latestConns !== null && isMounted) {
           applyDbDiscoverConnections(latestConns, false);
@@ -671,9 +1042,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
     return () => {
       isMounted = false;
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
       unsubscribe();
     };
-  }, [authUser?.id, supabaseConfigRev]);
+  }, [authUser?.id]);
 
   const activeNote = useMemo(() => {
     return notes.find((n) => n.id === activeNoteId) || notes[0];
@@ -682,7 +1056,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Handlers
   const toggleSidebar = () => setIsSidebarCollapsed((prev) => !prev);
 
-  const createNote = (type?: NoteType): string => {
+  const createNote = (type?: ManualNoteType): string => {
+    const now = new Date().toISOString();
     const newNote: Note = {
       id: `note-${Date.now()}`,
       title: '',
@@ -693,16 +1068,28 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       favorite: false,
       archived: false,
       relatedNoteIds: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
+      createdAt: now,
+      updatedAt: now,
     };
 
     setNotes((prev) => [newNote, ...prev]);
     setActiveNoteId(newNote.id);
     setActiveView('editor');
 
-    if (canRemoteSync()) {
-      upsertNoteToSupabase(newNote).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueUpsertNote(uid, newNote.id, now, true);
+      if (isBrowserOnline()) {
+        upsertNoteToSupabase(newNote)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertNote(uid, newNote.id, now);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
@@ -725,13 +1112,25 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       })
     );
 
-    if (canRemoteSync() && updatedObj) {
+    if (canRemoteSync() && updatedObj && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      const snapshot = updatedObj;
+      enqueueUpsertNote(uid, id, snapshot.updatedAt, false);
+
       if (embedTimersRef.current[id]) {
         clearTimeout(embedTimersRef.current[id]);
       }
-      embedTimersRef.current[id] = setTimeout(() => {
-        if (updatedObj && canRemoteSync()) {
-          embedAndSyncNote(updatedObj).catch(console.warn);
+
+      if (!isBrowserOnline()) {
+        setSyncStatus('offline');
+        return;
+      }
+
+      embedTimersRef.current[id] = setTimeout(async () => {
+        if (!canRemoteSync() || authUserRef.current?.id !== uid) return;
+        const ok = await syncNoteWithFallback(snapshot);
+        if (ok && authUserRef.current?.id === uid) {
+          dequeueUpsertNote(uid, id, snapshot.updatedAt);
         }
       }, 1500);
     } else if (updatedObj) {
@@ -742,16 +1141,41 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const linkRelatedNote = (noteId: string, targetNoteId: string) => {
     if (noteId === targetNoteId) return;
     markOfflineDirtyIfLoggedOut();
+    const now = new Date().toISOString();
+    const uid = authUserRef.current?.id;
+
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === noteId && !n.relatedNoteIds.includes(targetNoteId)) {
-          const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, targetNoteId] };
-          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
+          const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, targetNoteId], updatedAt: now };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, updated.id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, updated.id, now);
+                  }
+                })
+                .catch(console.warn);
+            }
+          }
           return updated;
         }
         if (n.id === targetNoteId && !n.relatedNoteIds.includes(noteId)) {
-          const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, noteId] };
-          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
+          const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, noteId], updatedAt: now };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, updated.id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, updated.id, now);
+                  }
+                })
+                .catch(console.warn);
+            }
+          }
           return updated;
         }
         return n;
@@ -761,16 +1185,49 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const unlinkRelatedNote = (noteId: string, targetNoteId: string) => {
     markOfflineDirtyIfLoggedOut();
+    const now = new Date().toISOString();
+    const uid = authUserRef.current?.id;
+
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === noteId) {
-          const updated = { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== targetNoteId) };
-          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
+          const updated = {
+            ...n,
+            relatedNoteIds: n.relatedNoteIds.filter((id) => id !== targetNoteId),
+            updatedAt: now,
+          };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, updated.id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, updated.id, now);
+                  }
+                })
+                .catch(console.warn);
+            }
+          }
           return updated;
         }
         if (n.id === targetNoteId) {
-          const updated = { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== noteId) };
-          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
+          const updated = {
+            ...n,
+            relatedNoteIds: n.relatedNoteIds.filter((id) => id !== noteId),
+            updatedAt: now,
+          };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, updated.id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, updated.id, now);
+                  }
+                })
+                .catch(console.warn);
+            }
+          }
           return updated;
         }
         return n;
@@ -788,14 +1245,28 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const target = notes.find((n) => n.id === id);
     if (!target) return false;
     if (isNoteEffectivelyEmpty(target)) {
+      if (embedTimersRef.current[id]) {
+        clearTimeout(embedTimersRef.current[id]);
+        delete embedTimersRef.current[id];
+      }
       const remaining = notes.filter((n) => n.id !== id);
       setNotes(remaining);
       if (activeNoteId === id && remaining.length > 0) {
         setActiveNoteId(remaining[0].id);
       }
 
-      if (canRemoteSync()) {
-        deleteNoteFromSupabase(id).catch(console.warn);
+      if (canRemoteSync() && authUserRef.current) {
+        const uid = authUserRef.current.id;
+        enqueueDeleteNote(uid, id);
+        if (isBrowserOnline()) {
+          deleteNoteFromSupabase(id)
+            .then((ok) => {
+              if (ok && authUserRef.current?.id === uid) {
+                dequeueDeleteNote(uid, id);
+              }
+            })
+            .catch(console.warn);
+        }
       }
       return true;
     }
@@ -803,24 +1274,55 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const deleteNote = (id: string) => {
+    if (embedTimersRef.current[id]) {
+      clearTimeout(embedTimersRef.current[id]);
+      delete embedTimersRef.current[id];
+    }
     const remaining = notes.filter((n) => n.id !== id);
     setNotes(remaining);
     if (remaining.length > 0) {
       setActiveNoteId(remaining[0].id);
     }
 
-    if (canRemoteSync()) {
-      deleteNoteFromSupabase(id).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueDeleteNote(uid, id);
+      if (isBrowserOnline()) {
+        deleteNoteFromSupabase(id)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueDeleteNote(uid, id);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
     }
   };
 
   const toggleFavoriteNote = (id: string) => {
     markOfflineDirtyIfLoggedOut();
+    const now = new Date().toISOString();
+    const uid = authUserRef.current?.id;
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === id) {
-          const updated = { ...n, favorite: !n.favorite };
-          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
+          const updated = { ...n, favorite: !n.favorite, updatedAt: now };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, id, now);
+                  }
+                })
+                .catch(console.warn);
+            } else {
+              setSyncStatus('offline');
+            }
+          }
           return updated;
         }
         return n;
@@ -830,11 +1332,26 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const toggleArchiveNote = (id: string) => {
     markOfflineDirtyIfLoggedOut();
+    const now = new Date().toISOString();
+    const uid = authUserRef.current?.id;
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === id) {
-          const updated = { ...n, archived: !n.archived };
-          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
+          const updated = { ...n, archived: !n.archived, updatedAt: now };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, id, now);
+                  }
+                })
+                .catch(console.warn);
+            } else {
+              setSyncStatus('offline');
+            }
+          }
           return updated;
         }
         return n;
@@ -863,6 +1380,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const createFragment = (data: { type: FragmentType; title: string; content: string; tags: string[]; source?: string }): string => {
     const id = `fragment-${Date.now()}`;
+    const now = new Date().toISOString();
     const newFragment: Fragment = {
       id,
       type: data.type,
@@ -871,13 +1389,25 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       tags: data.tags,
       source: data.source,
       date: formatDateDDMMYYYY(),
-      updatedAt: new Date().toISOString(),
+      updatedAt: now,
       starred: false,
     };
     setFragments((prev) => [newFragment, ...prev]);
 
-    if (canRemoteSync()) {
-      upsertFragmentToSupabase(newFragment).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueUpsertFragment(uid, id, now, true);
+      if (isBrowserOnline()) {
+        upsertFragmentToSupabase(newFragment)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertFragment(uid, id, now);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
@@ -899,24 +1429,46 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       })
     );
 
-    if (canRemoteSync() && updatedFragObj) {
+    if (canRemoteSync() && updatedFragObj && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      const snapshot = updatedFragObj;
+      enqueueUpsertFragment(uid, id, updatedAt, false);
+
+      if (!isBrowserOnline()) {
+        setSyncStatus('offline');
+        return;
+      }
+
       // Preserve existing vector embedding unless user explicitly removes it
-      upsertFragmentToSupabase(updatedFragObj).catch(console.warn);
+      upsertFragmentToSupabase(snapshot)
+        .then((ok) => {
+          if (ok && !snapshot.embeddedAt && authUserRef.current?.id === uid) {
+            dequeueUpsertFragment(uid, id, updatedAt);
+          }
+        })
+        .catch(console.warn);
 
       // Only auto re-embed if the user already opted this Fragment into vector embedding
-      if (updatedFragObj.embeddedAt) {
-        const snapshot = updatedFragObj;
+      if (snapshot.embeddedAt) {
         if (fragEmbedTimersRef.current[id]) {
           clearTimeout(fragEmbedTimersRef.current[id]);
         }
         fragEmbedTimersRef.current[id] = setTimeout(async () => {
-          if (!canRemoteSync()) return;
+          if (!canRemoteSync() || authUserRef.current?.id !== uid) return;
           const ok = await embedAndSyncFragment(snapshot);
           if (ok) {
             const nowIso = new Date().toISOString();
             setFragments((prev) =>
               prev.map((f) => (f.id === id ? { ...f, embeddedAt: nowIso } : f))
             );
+            if (authUserRef.current?.id === uid) {
+              dequeueUpsertFragment(uid, id, updatedAt);
+            }
+          } else {
+            const fallbackOk = await upsertFragmentToSupabase(snapshot);
+            if (fallbackOk && authUserRef.current?.id === uid) {
+              dequeueUpsertFragment(uid, id, updatedAt);
+            }
           }
         }, 1500);
       }
@@ -926,22 +1478,53 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const deleteFragment = (id: string) => {
+    if (fragEmbedTimersRef.current[id]) {
+      clearTimeout(fragEmbedTimersRef.current[id]);
+      delete fragEmbedTimersRef.current[id];
+    }
     setFragments((prev) => prev.filter((f) => f.id !== id));
     if (activeFragmentId === id) {
       closeFragmentDrawer();
     }
-    if (canRemoteSync()) {
-      deleteFragmentFromSupabase(id).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueDeleteFragment(uid, id);
+      if (isBrowserOnline()) {
+        deleteFragmentFromSupabase(id)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueDeleteFragment(uid, id);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
     }
   };
 
   const toggleStarFragment = (id: string) => {
     markOfflineDirtyIfLoggedOut();
+    const now = new Date().toISOString();
+    const uid = authUserRef.current?.id;
     setFragments((prev) =>
       prev.map((f) => {
         if (f.id === id) {
-          const updated = { ...f, starred: !f.starred };
-          if (canRemoteSync()) upsertFragmentToSupabase(updated).catch(console.warn);
+          const updated = { ...f, starred: !f.starred, updatedAt: now };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertFragment(uid, id, now, false);
+            if (isBrowserOnline()) {
+              upsertFragmentToSupabase(updated)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertFragment(uid, id, now);
+                  }
+                })
+                .catch(console.warn);
+            } else {
+              setSyncStatus('offline');
+            }
+          }
           return updated;
         }
         return f;
@@ -1183,20 +1766,31 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const dismissConnection = (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => {
     const { pairKey, first, second } = buildCanonicalPair(itemA, itemB);
+    const now = new Date().toISOString();
     setDismissedConnections((prev) => (prev.includes(pairKey) ? prev : [...prev, pairKey]));
     setApprovedConnections((prev) => prev.filter((k) => k !== pairKey));
 
-    if (canRemoteSync()) {
-      upsertDiscoverConnectionToSupabase({
-        pairKey,
-        itemAId: first.id,
-        itemAKind: first.kind,
-        itemBId: second.id,
-        itemBKind: second.kind,
-        status: 'dismissed',
-        analysis: connectionAnalyses[pairKey],
-        updatedAt: new Date().toISOString(),
-      }).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueUpsertConnection(uid, pairKey, now);
+      if (isBrowserOnline()) {
+        upsertDiscoverConnectionToSupabase({
+          pairKey,
+          itemAId: first.id,
+          itemAKind: first.kind,
+          itemBId: second.id,
+          itemBKind: second.kind,
+          status: 'dismissed',
+          analysis: connectionAnalyses[pairKey],
+          updatedAt: now,
+        })
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertConnection(uid, pairKey, now);
+            }
+          })
+          .catch(console.warn);
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
@@ -1211,6 +1805,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const approveConnection = (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => {
     const { pairKey, first, second } = buildCanonicalPair(itemA, itemB);
+    const now = new Date().toISOString();
     setApprovedConnections((prev) => (prev.includes(pairKey) ? prev : [...prev, pairKey]));
     setDismissedConnections((prev) => prev.filter((k) => k !== pairKey));
 
@@ -1218,17 +1813,27 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       linkRelatedNote(itemA.id, itemB.id);
     }
 
-    if (canRemoteSync()) {
-      upsertDiscoverConnectionToSupabase({
-        pairKey,
-        itemAId: first.id,
-        itemAKind: first.kind,
-        itemBId: second.id,
-        itemBKind: second.kind,
-        status: 'approved',
-        analysis: connectionAnalyses[pairKey],
-        updatedAt: new Date().toISOString(),
-      }).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueUpsertConnection(uid, pairKey, now);
+      if (isBrowserOnline()) {
+        upsertDiscoverConnectionToSupabase({
+          pairKey,
+          itemAId: first.id,
+          itemAKind: first.kind,
+          itemBId: second.id,
+          itemBKind: second.kind,
+          status: 'approved',
+          analysis: connectionAnalyses[pairKey],
+          updatedAt: now,
+        })
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertConnection(uid, pairKey, now);
+            }
+          })
+          .catch(console.warn);
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
@@ -1240,28 +1845,39 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     analysis: ConnectionAnalysis
   ) => {
     const { pairKey, first, second } = buildCanonicalPair(itemA, itemB);
+    const now = new Date().toISOString();
     setConnectionAnalyses((prev) => ({
       ...prev,
       [pairKey]: analysis,
     }));
 
-    if (canRemoteSync()) {
-      const currentStatus = approvedConnections.includes(pairKey)
-        ? 'approved'
-        : dismissedConnections.includes(pairKey)
-        ? 'dismissed'
-        : 'pending';
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueUpsertConnection(uid, pairKey, now);
+      if (isBrowserOnline()) {
+        const currentStatus = approvedConnections.includes(pairKey)
+          ? 'approved'
+          : dismissedConnections.includes(pairKey)
+          ? 'dismissed'
+          : 'pending';
 
-      upsertDiscoverConnectionToSupabase({
-        pairKey,
-        itemAId: first.id,
-        itemAKind: first.kind,
-        itemBId: second.id,
-        itemBKind: second.kind,
-        status: currentStatus,
-        analysis,
-        updatedAt: new Date().toISOString(),
-      }).catch(console.warn);
+        upsertDiscoverConnectionToSupabase({
+          pairKey,
+          itemAId: first.id,
+          itemAKind: first.kind,
+          itemBId: second.id,
+          itemBKind: second.kind,
+          status: currentStatus,
+          analysis,
+          updatedAt: now,
+        })
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertConnection(uid, pairKey, now);
+            }
+          })
+          .catch(console.warn);
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
@@ -1270,8 +1886,18 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const unlinkDiscoverConnection = (idA: string, idB: string) => {
     const pairKey = makePairKey(idA, idB);
     setApprovedConnections((prev) => prev.filter((k) => k !== pairKey));
-    if (canRemoteSync()) {
-      unlinkDiscoverConnectionInSupabase(pairKey).catch(console.warn);
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueDeleteConnection(uid, pairKey);
+      if (isBrowserOnline()) {
+        unlinkDiscoverConnectionInSupabase(pairKey)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueDeleteConnection(uid, pairKey);
+            }
+          })
+          .catch(console.warn);
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
@@ -1283,6 +1909,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const frag = fragments.find((f) => f.id === fragmentId);
     if (!frag) {
       return { ok: false, error: 'Fragment tidak ditemukan.' };
+    }
+
+    if (canRemoteSync() && !isBrowserOnline()) {
+      return {
+        ok: false,
+        error:
+          'Koneksi internet terputus. Naikkan pangkat Fragment ke Note saat online agar salinan, relasi, dan embedding di Supabase tetap aman.',
+      };
     }
 
     const pairMatchesFragment = (pairKey: string) => {
@@ -1568,13 +2202,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     htmlContent,
     tags,
     sourceItems,
-    type = 'thought',
   }: {
     title: string;
     htmlContent: string;
     tags: string[];
     sourceItems: DiscoverSourceItem[];
-    type?: NoteType;
   }): string => {
     const newId = `note-${Date.now()}`;
     const noteIds = Array.from(
@@ -1582,6 +2214,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     );
     const fragmentItems = sourceItems.filter((item) => item.kind === 'fragment');
 
+    const cleanedBodyHtml = stripSynthesisSourcesFooter(htmlContent) || htmlContent;
     const sourceListHtml = sourceItems
       .map(
         (item) =>
@@ -1589,7 +2222,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       )
       .join('');
 
-    const finalHtml = `${htmlContent}<hr><p><strong>Sumber Pengetahuan (${sourceItems.length}):</strong></p><ul>${sourceListHtml}</ul>`;
+    const finalHtml = `${cleanedBodyHtml}<hr><p><strong>Sumber Pengetahuan (${sourceItems.length}):</strong></p><ul>${sourceListHtml}</ul>`;
     const plainText = cleanTextForEmbedding(finalHtml);
     const excerpt = plainText.slice(0, 180);
     const now = new Date().toISOString();
@@ -1605,7 +2238,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       title: title.trim() || 'Dokumen Sintesis',
       content: finalHtml,
       excerpt,
-      type,
+      type: 'synthesis',
       tags: cleanTags,
       source: sourceLabel,
       favorite: false,
@@ -1616,11 +2249,23 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
 
     // Save synthesized document to Library & link bidirectionally without modifying source contents
+    const uid = authUserRef.current?.id;
     setNotes((prev) => {
       const updatedExisting = prev.map((n) => {
         if (noteIds.includes(n.id) && !n.relatedNoteIds.includes(newId)) {
-          const linked = { ...n, relatedNoteIds: [...n.relatedNoteIds, newId] };
-          if (canRemoteSync()) upsertNoteToSupabase(linked).catch(console.warn);
+          const linked = { ...n, relatedNoteIds: [...n.relatedNoteIds, newId], updatedAt: now };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, linked.id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(linked)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, linked.id, now);
+                  }
+                })
+                .catch(console.warn);
+            }
+          }
           return linked;
         }
         return n;
@@ -1628,15 +2273,228 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return [newNote, ...updatedExisting];
     });
 
-    if (canRemoteSync()) {
-      embedAndSyncNote(newNote).catch(() => {
-        upsertNoteToSupabase(newNote).catch(console.warn);
-      });
+    // Record fragment provenance in approvedConnections / discover_connections
+    if (fragmentItems.length > 0) {
+      const newNoteItem = noteToDiscoverItem(newNote);
+      const addedPairKeys: string[] = [];
+      for (const fragItem of fragmentItems) {
+        const { pairKey, first, second } = buildCanonicalPair(newNoteItem, fragItem);
+        addedPairKeys.push(pairKey);
+        if (canRemoteSync() && uid) {
+          enqueueUpsertConnection(uid, pairKey, now);
+          if (isBrowserOnline()) {
+            upsertDiscoverConnectionToSupabase({
+              pairKey,
+              itemAId: first.id,
+              itemAKind: first.kind,
+              itemBId: second.id,
+              itemBKind: second.kind,
+              status: 'approved',
+              analysis: connectionAnalyses[pairKey],
+              updatedAt: now,
+            })
+              .then((ok) => {
+                if (ok && authUserRef.current?.id === uid) {
+                  dequeueUpsertConnection(uid, pairKey, now);
+                }
+              })
+              .catch(console.warn);
+          }
+        }
+      }
+      if (addedPairKeys.length > 0) {
+        setApprovedConnections((prev) => Array.from(new Set([...prev, ...addedPairKeys])));
+      }
+    }
+
+    if (canRemoteSync() && uid) {
+      enqueueUpsertNote(uid, newNote.id, now, true);
+      if (isBrowserOnline()) {
+        syncNoteWithFallback(newNote)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertNote(uid, newNote.id, now);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
     } else {
       markOfflineDirtyIfLoggedOut();
     }
 
     return newId;
+  };
+
+  const updateSynthesizedNote = ({
+    targetNoteId,
+    title,
+    htmlContent,
+    tags,
+    newSourceItems,
+    allResolvedSourceItems,
+  }: {
+    targetNoteId: string;
+    title: string;
+    htmlContent: string;
+    tags: string[];
+    newSourceItems: DiscoverSourceItem[];
+    allResolvedSourceItems: DiscoverSourceItem[];
+  }): boolean => {
+    const existingTarget = notes.find((n) => n.id === targetNoteId);
+    if (!existingTarget) return false;
+
+    // Deduplicate all sources (existing + new)
+    const uniqueSourcesMap = new Map<string, DiscoverSourceItem>();
+    for (const item of allResolvedSourceItems) {
+      if (item.id !== targetNoteId && !uniqueSourcesMap.has(item.id)) {
+        uniqueSourcesMap.set(item.id, item);
+      }
+    }
+    for (const item of newSourceItems) {
+      if (item.id !== targetNoteId && !uniqueSourcesMap.has(item.id)) {
+        uniqueSourcesMap.set(item.id, item);
+      }
+    }
+    const mergedSources = Array.from(uniqueSourcesMap.values());
+
+    const mergedNoteIds = Array.from(
+      new Set([
+        ...(existingTarget.relatedNoteIds || []),
+        ...mergedSources.filter((item) => item.kind === 'note').map((item) => item.id),
+      ])
+    ).filter((id) => id !== targetNoteId);
+
+    const newNoteIdsToLink = Array.from(
+      new Set(newSourceItems.filter((item) => item.kind === 'note').map((item) => item.id))
+    ).filter((id) => id !== targetNoteId);
+
+    const newFragmentItems = newSourceItems.filter((item) => item.kind === 'fragment');
+    const totalFragmentCount = mergedSources.filter((item) => item.kind === 'fragment').length;
+
+    const cleanedBodyHtml = stripSynthesisSourcesFooter(htmlContent) || htmlContent;
+    const sourceListHtml = mergedSources
+      .map(
+        (item) =>
+          `<li>[${item.kind === 'fragment' ? 'Fragment' : 'Catatan'}] ${item.title || 'Tanpa Judul'}</li>`
+      )
+      .join('');
+
+    const finalHtml =
+      mergedSources.length > 0
+        ? `${cleanedBodyHtml}<hr><p><strong>Sumber Pengetahuan (${mergedSources.length}):</strong></p><ul>${sourceListHtml}</ul>`
+        : cleanedBodyHtml;
+
+    const plainText = cleanTextForEmbedding(finalHtml);
+    const excerpt = plainText.slice(0, 180);
+    const now = new Date().toISOString();
+
+    const cleanTags = Array.from(
+      new Set([
+        'synthesis',
+        ...tags.map((t) => t.trim().toLowerCase().replace(/^#/, '')).filter(Boolean),
+      ])
+    );
+
+    const sourceLabel = `Disintesis dari ${mergedNoteIds.length} catatan${
+      totalFragmentCount > 0 ? ` & ${totalFragmentCount} fragments` : ''
+    }`;
+
+    const updatedSynthNote: Note = {
+      ...existingTarget,
+      title: title.trim() || existingTarget.title || 'Dokumen Sintesis',
+      content: finalHtml,
+      excerpt,
+      type: 'synthesis',
+      tags: cleanTags,
+      source: sourceLabel,
+      relatedNoteIds: mergedNoteIds,
+      updatedAt: now,
+    };
+
+    const uid = authUserRef.current?.id;
+    setNotes((prev) =>
+      prev.map((n) => {
+        if (n.id === targetNoteId) {
+          return updatedSynthNote;
+        }
+        if (newNoteIdsToLink.includes(n.id) && !n.relatedNoteIds.includes(targetNoteId)) {
+          const linked: Note = {
+            ...n,
+            relatedNoteIds: [...n.relatedNoteIds, targetNoteId],
+            updatedAt: now,
+          };
+          if (canRemoteSync() && uid) {
+            enqueueUpsertNote(uid, linked.id, now, false);
+            if (isBrowserOnline()) {
+              upsertNoteToSupabase(linked)
+                .then((ok) => {
+                  if (ok && authUserRef.current?.id === uid) {
+                    dequeueUpsertNote(uid, linked.id, now);
+                  }
+                })
+                .catch(console.warn);
+            }
+          }
+          return linked;
+        }
+        return n;
+      })
+    );
+
+    // Record newly added fragment links in approvedConnections / discover_connections
+    if (newFragmentItems.length > 0) {
+      const synthItem = noteToDiscoverItem(updatedSynthNote);
+      const addedPairKeys: string[] = [];
+      for (const fragItem of newFragmentItems) {
+        const { pairKey, first, second } = buildCanonicalPair(synthItem, fragItem);
+        addedPairKeys.push(pairKey);
+        if (canRemoteSync() && uid) {
+          enqueueUpsertConnection(uid, pairKey, now);
+          if (isBrowserOnline()) {
+            upsertDiscoverConnectionToSupabase({
+              pairKey,
+              itemAId: first.id,
+              itemAKind: first.kind,
+              itemBId: second.id,
+              itemBKind: second.kind,
+              status: 'approved',
+              analysis: connectionAnalyses[pairKey],
+              updatedAt: now,
+            })
+              .then((ok) => {
+                if (ok && authUserRef.current?.id === uid) {
+                  dequeueUpsertConnection(uid, pairKey, now);
+                }
+              })
+              .catch(console.warn);
+          }
+        }
+      }
+      if (addedPairKeys.length > 0) {
+        setApprovedConnections((prev) => Array.from(new Set([...prev, ...addedPairKeys])));
+      }
+    }
+
+    if (canRemoteSync() && uid) {
+      enqueueUpsertNote(uid, updatedSynthNote.id, now, false);
+      if (isBrowserOnline()) {
+        syncNoteWithFallback(updatedSynthNote)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertNote(uid, updatedSynthNote.id, now);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
+
+    return true;
   };
 
   return (
@@ -1692,7 +2550,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         authLoading,
         offlineBypass,
         enterOfflineMode,
-        refreshSupabaseConfig,
+        exitOfflineMode,
+        safetyModalAction,
+        closeSafetyModal,
+        confirmSafetyAction,
+        requestSignOut,
+        requestWipeLocalExit,
+        requestResetWorkspace,
         signIn,
         signUp,
         signOut,
@@ -1722,7 +2586,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         promoteFragmentToNote,
         resetDismissedConnections,
         performUnifiedSemanticSearch,
+        synthesisTargetNoteId,
+        startUpdateSynthesis,
+        clearSynthesisTarget,
         saveSynthesizedNote,
+        updateSynthesizedNote,
       }}
     >
       {children}

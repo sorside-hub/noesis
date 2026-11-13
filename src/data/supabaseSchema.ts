@@ -21,7 +21,7 @@ CREATE TABLE IF NOT EXISTS public.notes (
   title TEXT NOT NULL DEFAULT '',
   content TEXT DEFAULT '',
   excerpt TEXT DEFAULT '',
-  type TEXT DEFAULT 'thought' CHECK (type IN ('thought', 'reference', 'idea')),
+  type TEXT DEFAULT 'thought' CHECK (type IN ('thought', 'reference', 'idea', 'synthesis')),
   tags TEXT[] DEFAULT '{}',
   source TEXT,
   favorite BOOLEAN DEFAULT false,
@@ -67,6 +67,27 @@ ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.u
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
 ALTER TABLE public.notes DROP COLUMN IF EXISTS word_count;
+
+-- Perbarui CHECK constraint pada notes.type agar mendukung dokumen 'synthesis'
+DO $$
+DECLARE
+  c_name TEXT;
+BEGIN
+  FOR c_name IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'notes'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) LIKE '%type%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.notes DROP CONSTRAINT IF EXISTS %I', c_name);
+  END LOOP;
+END $$;
+ALTER TABLE public.notes
+  ADD CONSTRAINT notes_type_check CHECK (type IN ('thought', 'reference', 'idea', 'synthesis'));
 
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedding vector(1024);

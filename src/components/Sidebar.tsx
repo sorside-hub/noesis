@@ -20,6 +20,7 @@ import {
   ChevronRight,
   LogOut,
   LogIn,
+  Trash2,
 } from 'lucide-react';
 
 export const Sidebar: React.FC = () => {
@@ -36,7 +37,9 @@ export const Sidebar: React.FC = () => {
     toggleSidebar,
     openFragmentDrawer,
     authUser,
-    signOut,
+    exitOfflineMode,
+    requestSignOut,
+    requestWipeLocalExit,
   } = useNoesis();
 
   const userEmail = authUser?.email || 'Mode Lokal (Offline)';
@@ -101,13 +104,35 @@ export const Sidebar: React.FC = () => {
         </div>
 
         <div className="flex flex-col items-center gap-2">
-          <button
-            onClick={() => signOut()}
-            title={authUser ? `Keluar (${userEmail})` : 'Masuk ke Akun'}
-            className="w-9 h-9 rounded-lg flex items-center justify-center text-[#6B635B] dark:text-[#A8A196] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
-          >
-            {authUser ? <LogOut size={16} /> : <LogIn size={16} />}
-          </button>
+          {authUser ? (
+            <button
+              onClick={requestSignOut}
+              title={`Keluar (${userEmail})`}
+              className="w-9 h-9 rounded-lg flex items-center justify-center text-[#6B635B] dark:text-[#A8A196] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+              aria-label="Keluar dari Akun"
+            >
+              <LogOut size={16} />
+            </button>
+          ) : (
+            <>
+              <button
+                onClick={exitOfflineMode}
+                title="Masuk ke Akun (Simpan Data Lokal)"
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-[#9A3412] dark:text-[#EA580C] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+                aria-label="Masuk ke Akun"
+              >
+                <LogIn size={16} />
+              </button>
+              <button
+                onClick={requestWipeLocalExit}
+                title="Hapus Data Lokal & Keluar"
+                className="w-9 h-9 rounded-lg flex items-center justify-center text-[#6B635B] dark:text-[#A8A196] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+                aria-label="Hapus Data Lokal & Keluar"
+              >
+                <Trash2 size={15} />
+              </button>
+            </>
+          )}
           <button
             onClick={toggleSidebar}
             title="Expand Sidebar"
@@ -325,15 +350,40 @@ export const Sidebar: React.FC = () => {
             </div>
           </div>
 
-          <button
-            type="button"
-            onClick={() => signOut()}
-            title={authUser ? 'Keluar dari Akun' : 'Masuk ke Akun'}
-            className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors shrink-0"
-            aria-label={authUser ? 'Keluar' : 'Masuk'}
-          >
-            {authUser ? <LogOut size={14} /> : <LogIn size={14} />}
-          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            {authUser ? (
+              <button
+                type="button"
+                onClick={requestSignOut}
+                title="Keluar dari Akun"
+                className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+                aria-label="Keluar"
+              >
+                <LogOut size={14} />
+              </button>
+            ) : (
+              <>
+                <button
+                  type="button"
+                  onClick={exitOfflineMode}
+                  title="Masuk ke Akun (Data lokal otomatis disinkronkan)"
+                  className="p-1.5 rounded-lg text-[#9A3412] dark:text-[#EA580C] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+                  aria-label="Masuk ke Akun"
+                >
+                  <LogIn size={14} />
+                </button>
+                <button
+                  type="button"
+                  onClick={requestWipeLocalExit}
+                  title="Hapus Data Lokal & Keluar"
+                  className="p-1.5 rounded-lg text-[#9C9388] hover:text-red-600 dark:hover:text-red-400 hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
+                  aria-label="Hapus Data Lokal & Keluar"
+                >
+                  <Trash2 size={14} />
+                </button>
+              </>
+            )}
+          </div>
         </div>
       </div>
     </aside>

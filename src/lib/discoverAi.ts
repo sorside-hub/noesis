@@ -321,10 +321,45 @@ export const computeRelatedNoteSuggestions = (
 // SERVER-SIDE GEMINI API CLIENT HELPERS
 // ============================================================================
 
+export const stripSynthesisSourcesFooter = (html: string): string => {
+  if (!html) return '';
+  return html
+    .replace(
+      /(?:<hr\s*\/?>\s*)?<p>\s*<strong>\s*Sumber Pengetahuan\s*\(\d+\):\s*<\/strong>\s*<\/p>\s*<ul>[\s\S]*?<\/ul>\s*$/i,
+      ''
+    )
+    .trim();
+};
+
+export const parseLegacySynthesisFooterItems = (
+  html: string
+): { kind: 'note' | 'fragment'; title: string }[] => {
+  if (!html) return [];
+  const footerMatch = html.match(
+    /<p>\s*<strong>\s*Sumber Pengetahuan\s*\(\d+\):\s*<\/strong>\s*<\/p>\s*<ul>([\s\S]*?)<\/ul>\s*$/i
+  );
+  if (!footerMatch) return [];
+  const items: { kind: 'note' | 'fragment'; title: string }[] = [];
+  const liRegex = /<li>\s*\[(Fragment|Catatan)\]\s*([\s\S]*?)<\/li>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = liRegex.exec(footerMatch[1])) !== null) {
+    const kind = match[1].toLowerCase() === 'fragment' ? 'fragment' : 'note';
+    const title = match[2].replace(/<[^>]*>/g, '').trim();
+    if (title) items.push({ kind, title });
+  }
+  return items;
+};
+
 export const requestSynthesizeDocument = async (payload: {
   topic?: string;
   style: SynthesisStyle;
   items: DiscoverSourceItem[];
+  existingSynthesis?: {
+    id: string;
+    title: string;
+    htmlContent: string;
+    tags?: string[];
+  };
 }): Promise<SynthesisResult> => {
   const res = await fetch('/api/discover/synthesize', {
     method: 'POST',

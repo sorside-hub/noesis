@@ -13,7 +13,8 @@ export type ThemePreference = 'light' | 'dark' | 'system';
 export type FragmentType = 'thought' | 'reference' | 'idea';
 export type RelicType = FragmentType;
 
-export type NoteType = 'reference' | 'thought' | 'idea';
+export type ManualNoteType = 'reference' | 'thought' | 'idea';
+export type NoteType = ManualNoteType | 'synthesis';
 
 export type StreamFilter = 'all' | 'favorites' | 'archived';
 

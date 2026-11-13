@@ -2,19 +2,11 @@ import { createClient, SupabaseClient, Session, User, AuthChangeEvent } from '@s
 import { Note, Fragment, DiscoverConnectionRecord } from '../types';
 
 export const getSupabaseUrl = (): string => {
-  return (
-    import.meta.env.VITE_SUPABASE_URL ||
-    localStorage.getItem('noesis_supabase_url') ||
-    ''
-  ).trim();
+  return (import.meta.env.VITE_SUPABASE_URL || '').trim();
 };
 
 export const getSupabaseAnonKey = (): string => {
-  return (
-    import.meta.env.VITE_SUPABASE_ANON_KEY ||
-    localStorage.getItem('noesis_supabase_anon_key') ||
-    ''
-  ).trim();
+  return (import.meta.env.VITE_SUPABASE_ANON_KEY || '').trim();
 };
 
 export const isSupabaseConfigured = (): boolean => {
@@ -171,9 +163,18 @@ export const signOutFromSupabase = async (): Promise<{ error: string | null }> =
   const client = getSupabaseClient();
   if (!client) return { error: null };
   try {
+    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+      const { error } = await client.auth.signOut({ scope: 'local' });
+      return { error: error ? error.message : null };
+    }
     const { error } = await client.auth.signOut();
-    return { error: error ? error.message : null };
+    if (error) {
+      await client.auth.signOut({ scope: 'local' }).catch(() => {});
+      return { error: error.message };
+    }
+    return { error: null };
   } catch (err: any) {
+    await client.auth.signOut({ scope: 'local' }).catch(() => {});
     return { error: err?.message || 'Gagal logout.' };
   }
 };
@@ -286,9 +287,10 @@ export const fromDbFragment = (row: any): Fragment => {
 // ============================================================================
 
 export const fetchNotesFromSupabase = async (): Promise<Note[] | null> => {
-  if (!supabase) return null;
+  const client = getSupabaseClient();
+  if (!client) return null;
   try {
-    const { data, error } = await supabase
+    const { data, error } = await client
       .from('notes')
       .select('*')
       .order('updated_at', { ascending: false });

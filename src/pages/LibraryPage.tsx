@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNoesis } from '../context/NoesisContext';
-import { NoteType } from '../types';
+import { ManualNoteType, NoteType } from '../types';
 import {
   BookOpen,
   Search,
@@ -190,7 +190,11 @@ export const LibraryPage: React.FC = () => {
   };
 
   const handleCreateNew = () => {
-    const newId = createNote((selectedType !== 'all' ? selectedType : 'thought') as NoteType);
+    const manualType: ManualNoteType =
+      selectedType === 'thought' || selectedType === 'reference' || selectedType === 'idea'
+        ? selectedType
+        : 'thought';
+    const newId = createNote(manualType);
     setActiveNoteId(newId);
     setActiveView('editor');
   };
@@ -203,6 +207,8 @@ export const LibraryPage: React.FC = () => {
         return 'text-[#9A3412] dark:text-[#EA580C] bg-[#FED7AA]/30 dark:bg-[#431407]/40 border-[#FED7AA] dark:border-[#431407]';
       case 'idea':
         return 'text-[#B45309] dark:text-[#F59E0B] bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50';
+      case 'synthesis':
+        return 'text-[#6D28D9] dark:text-[#A78BFA] bg-violet-50 dark:bg-violet-950/40 border-violet-200 dark:border-violet-900/50';
       default:
         return 'text-[#6B635B] dark:text-[#A8A196] bg-stone-100 dark:bg-stone-800 border-stone-200';
     }
@@ -229,18 +235,27 @@ export const LibraryPage: React.FC = () => {
     return sortLabels[sortBy];
   };
 
+  const getMobileSortLabel = () => {
+    const sortLabels: Record<string, string> = {
+      updated: 'Updated',
+      created: 'Created',
+      alpha: 'A–Z',
+    };
+    return sortLabels[sortBy];
+  };
+
   return (
     <div
-      className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3.5 sm:px-8 lg:px-14 py-5 sm:py-8"
+      className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8"
       onClick={() => {
         setIsFilterDropdownOpen(false);
       }}
     >
-      <div className="max-w-5xl mx-auto space-y-8">
+      <div className="max-w-5xl mx-auto space-y-3 sm:space-y-8">
         {/* Header Row */}
-        <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-5 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <h1 className="font-serif text-3xl sm:text-4xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1]">
+        <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3 sm:pb-5 flex items-center justify-between gap-4">
+          <div className="flex items-center gap-2.5 sm:gap-3">
+            <h1 className="font-serif text-2xl sm:text-4xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1]">
               Library
             </h1>
             <span className="px-2.5 py-0.5 rounded-full text-xs font-mono bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#9C9388] dark:text-[#736C62]">
@@ -250,7 +265,7 @@ export const LibraryPage: React.FC = () => {
 
           <button
             onClick={handleCreateNew}
-            className="px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs flex items-center gap-2 shrink-0"
+            className="hidden md:flex px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shadow-xs items-center gap-2 shrink-0"
           >
             <Feather size={15} />
             <span>New Note</span>
@@ -258,7 +273,7 @@ export const LibraryPage: React.FC = () => {
         </div>
 
         {/* Filter & Search Bar */}
-        <div className="space-y-4">
+        <div className="space-y-2 sm:space-y-4">
           {/* Desktop Search & Filter Bar (md and up) */}
           <div className="hidden md:block space-y-4">
             {/* Desktop Search Box */}
@@ -313,19 +328,23 @@ export const LibraryPage: React.FC = () => {
                   { id: 'thought', label: 'Thoughts' },
                   { id: 'reference', label: 'References' },
                   { id: 'idea', label: 'Ideas' },
+                  { id: 'synthesis', label: 'Synthesis' },
                 ].map((tab) => {
                   const isSelected = selectedType === tab.id;
                   return (
                     <button
                       key={tab.id}
                       onClick={() => setSelectedType(tab.id)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                      className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors flex items-center gap-1.5 ${
                         isSelected
-                          ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                          ? tab.id === 'synthesis'
+                            ? 'bg-white dark:bg-[#272422] text-[#6D28D9] dark:text-[#A78BFA] shadow-xs'
+                            : 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
                           : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
                       }`}
                     >
-                      {tab.label}
+                      {tab.id === 'synthesis' && <Sparkles size={12} />}
+                      <span>{tab.label}</span>
                     </button>
                   );
                 })}
@@ -389,8 +408,41 @@ export const LibraryPage: React.FC = () => {
           </div>
 
           {/* Mobile Search & Controls Layout (md:hidden) */}
-          <div className="md:hidden space-y-2.5">
-            {/* Row 1: Search Bar (with AI & Close) OR Search Button (Icon + Text) + Category Tabs */}
+          <div className="md:hidden space-y-2">
+            {/* Row 1: Centered Category Tabs Full-Width */}
+            <div className="overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none]">
+              <div className="w-max min-w-full flex items-center justify-center">
+                <div className="inline-flex items-center gap-0.5 p-1 bg-[#F5EFEB] dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                  {[
+                    { id: 'all', label: 'All' },
+                    { id: 'thought', label: 'Thoughts' },
+                    { id: 'reference', label: 'References' },
+                    { id: 'idea', label: 'Ideas' },
+                    { id: 'synthesis', label: 'Synthesis' },
+                  ].map((tab) => {
+                    const isSelected = selectedType === tab.id;
+                    return (
+                      <button
+                        key={tab.id}
+                        onClick={() => setSelectedType(tab.id)}
+                        className={`px-2 py-1 text-[11px] font-medium rounded-lg transition-colors whitespace-nowrap shrink-0 flex items-center gap-1 ${
+                          isSelected
+                            ? tab.id === 'synthesis'
+                              ? 'bg-white dark:bg-[#272422] text-[#6D28D9] dark:text-[#A78BFA] shadow-xs'
+                              : 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                            : 'text-[#6B635B] dark:text-[#A8A196]'
+                        }`}
+                      >
+                        {tab.id === 'synthesis' && <Sparkles size={10} />}
+                        <span>{tab.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            {/* Row 2: Full-Width Search Input (when open) OR [Search Trigger] + [Grid|List] + [Fixed Filter/Sort] */}
             {isMobileSearchOpen || search ? (
               <div ref={mobileSearchRef} className="relative flex items-center">
                 <Search size={15} className="absolute left-3 text-[#9C9388] pointer-events-none" />
@@ -400,7 +452,7 @@ export const LibraryPage: React.FC = () => {
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={isSemanticSearch ? "Cari makna..." : "Search notes..."}
                   autoFocus
-                  className="w-full text-xs pl-8 pr-20 py-2.5 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#9A3412] dark:border-[#EA580C] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none"
+                  className="w-full h-[36px] text-xs pl-8 pr-20 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#9A3412] dark:border-[#EA580C] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none"
                 />
                 <div className="absolute right-2 flex items-center gap-1">
                   <button
@@ -430,105 +482,86 @@ export const LibraryPage: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-1.5">
-                {/* Search Button (Icon + Text) */}
+              <div className="flex items-center justify-between gap-2">
+                {/* Search Trigger Button */}
                 <button
                   type="button"
                   onClick={() => setIsMobileSearchOpen(true)}
-                  className="px-2.5 py-2 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] text-xs font-medium flex items-center gap-1.5 shrink-0 transition-colors"
+                  className="flex-1 min-w-0 h-[36px] px-3 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] text-xs font-medium flex items-center justify-start gap-2 transition-colors"
                   title="Search notes"
                 >
-                  <Search size={13} className="text-[#9C9388]" />
-                  <span>Search</span>
+                  <Search size={13} className="shrink-0 text-[#9C9388]" />
+                  <span className="truncate">Search</span>
                 </button>
 
-                {/* Category Tabs */}
-                <div className="flex-1 min-w-0 flex items-center justify-between p-1 bg-[#F5EFEB] dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
-                  {[
-                    { id: 'all', label: 'All' },
-                    { id: 'thought', label: 'Thoughts' },
-                    { id: 'reference', label: 'References' },
-                    { id: 'idea', label: 'Ideas' },
-                  ].map((tab) => {
-                    const isSelected = selectedType === tab.id;
-                    return (
-                      <button
-                        key={tab.id}
-                        onClick={() => setSelectedType(tab.id)}
-                        className={`px-1.5 sm:px-2 py-1 text-[11px] sm:text-xs font-medium rounded-lg transition-colors whitespace-nowrap ${
-                          isSelected
-                            ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
-                            : 'text-[#6B635B] dark:text-[#A8A196]'
+                {/* Grid/List Switcher + Fixed-Width Filter/Sort Dropdown */}
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <div className="flex items-center h-[36px] p-1 bg-white dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] shadow-2xs">
+                    <button
+                      onClick={() => setViewLayout('grid')}
+                      title="Grid View"
+                      className={`px-2.5 h-full rounded-lg transition-colors flex items-center justify-center ${
+                        viewLayout === 'grid'
+                          ? 'bg-[#F5EFEB] dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C]'
+                          : 'text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                      }`}
+                    >
+                      <LayoutGrid size={15} />
+                    </button>
+                    <button
+                      onClick={() => setViewLayout('list')}
+                      title="List View"
+                      className={`px-2.5 h-full rounded-lg transition-colors flex items-center justify-center ${
+                        viewLayout === 'list'
+                          ? 'bg-[#F5EFEB] dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C]'
+                          : 'text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                      }`}
+                    >
+                      <ListIcon size={15} />
+                    </button>
+                  </div>
+
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsFilterDropdownOpen((prev) => !prev);
+                      }}
+                      className={`w-[126px] h-[36px] px-2.5 rounded-xl border text-xs font-medium flex items-center justify-between gap-1.5 transition-colors shadow-2xs select-none ${
+                        showFavoritesOnly || showArchivedOnly || isFilterDropdownOpen
+                          ? 'border-[#9A3412] dark:border-[#EA580C] bg-white dark:bg-[#1E1C1A] text-[#9A3412] dark:text-[#EA580C]'
+                          : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2] dark:hover:bg-[#272422]'
+                      }`}
+                    >
+                      <span className="flex items-center gap-1.5 min-w-0">
+                        {showFavoritesOnly ? (
+                          <Star size={12} fill="currentColor" className="shrink-0 text-[#B45309] dark:text-[#F59E0B]" />
+                        ) : showArchivedOnly ? (
+                          <Archive size={12} className="shrink-0" />
+                        ) : (
+                          <ArrowUpDown size={13} className="shrink-0 text-[#9C9388]" />
+                        )}
+                        <span className="truncate">{getMobileSortLabel()}</span>
+                      </span>
+                      <ChevronDown
+                        size={13}
+                        className={`shrink-0 text-[#9C9388] transition-transform duration-200 ${
+                          isFilterDropdownOpen ? 'rotate-180 text-[#9A3412] dark:text-[#EA580C]' : ''
                         }`}
-                      >
-                        {tab.label}
-                      </button>
-                    );
-                  })}
+                      />
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
-
-            {/* Row 2: Right-Aligned Controls (Grid/List Switcher & Filter/Sort Dropdown) */}
-            <div className="flex items-center justify-end gap-2">
-              <div className="flex items-center h-[36px] p-1 bg-white dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] shadow-2xs">
-                <button
-                  onClick={() => setViewLayout('grid')}
-                  title="Grid View"
-                  className={`px-2.5 h-full rounded-lg transition-colors flex items-center justify-center ${
-                    viewLayout === 'grid'
-                      ? 'bg-[#F5EFEB] dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C]'
-                      : 'text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
-                  }`}
-                >
-                  <LayoutGrid size={15} />
-                </button>
-                <button
-                  onClick={() => setViewLayout('list')}
-                  title="List View"
-                  className={`px-2.5 h-full rounded-lg transition-colors flex items-center justify-center ${
-                    viewLayout === 'list'
-                      ? 'bg-[#F5EFEB] dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C]'
-                      : 'text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
-                  }`}
-                >
-                  <ListIcon size={15} />
-                </button>
-              </div>
-
-              <div className="relative">
-                <button
-                  type="button"
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setIsFilterDropdownOpen((prev) => !prev);
-                  }}
-                  className={`flex items-center gap-1.5 px-3 h-[36px] rounded-xl border text-xs font-medium transition-colors shadow-2xs select-none ${
-                    showFavoritesOnly || showArchivedOnly || isFilterDropdownOpen
-                      ? 'border-[#9A3412] dark:border-[#EA580C] bg-white dark:bg-[#1E1C1A] text-[#9A3412] dark:text-[#EA580C]'
-                      : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2] dark:hover:bg-[#272422]'
-                  }`}
-                >
-                  <ArrowUpDown size={13} className="shrink-0 text-[#9C9388]" />
-                  <span className="flex items-center gap-1.5">
-                    <span>{getFilterSortLabel()}</span>
-                  </span>
-                  <ChevronDown
-                    size={13}
-                    className={`text-[#9C9388] transition-transform duration-200 ${
-                      isFilterDropdownOpen ? 'rotate-180 text-[#9A3412] dark:text-[#EA580C]' : ''
-                    }`}
-                  />
-                </button>
-              </div>
-            </div>
           </div>
 
           {/* Shared Custom Filter/Sort Popover Content */}
           {isFilterDropdownOpen && (
             <div
               onClick={(e) => e.stopPropagation()}
-              className="absolute right-3.5 sm:right-8 lg:right-14 mt-1 w-56 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xl py-2 z-40 animate-in fade-in zoom-in-95 duration-150"
+              className="absolute right-3 sm:right-8 lg:right-14 mt-1 w-56 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xl py-2 z-40 animate-in fade-in zoom-in-95 duration-150"
             >
                     {/* Filter Status Group */}
                     <div className="px-3.5 py-1 text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
@@ -624,7 +657,7 @@ export const LibraryPage: React.FC = () => {
 
         {/* Notes Grid or List Layout */}
         {filteredNotes.length === 0 ? (
-          <div className="py-20 px-6 text-center border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] rounded-3xl p-8 bg-white/40 dark:bg-[#1E1C1A]/40 flex flex-col items-center justify-center">
+          <div className="py-12 sm:py-20 px-4 sm:px-6 text-center border border-dashed border-[#E8E2D8] dark:border-[#2F2B28] rounded-3xl p-6 sm:p-8 bg-white/40 dark:bg-[#1E1C1A]/40 flex flex-col items-center justify-center">
             <div className="w-14 h-14 rounded-2xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mb-3.5">
               <BookOpen size={24} />
             </div>
@@ -678,27 +711,30 @@ export const LibraryPage: React.FC = () => {
           </div>
         ) : viewLayout === 'grid' ? (
           /* Grid Mode: 2 columns on mobile, 3 columns on tablet/desktop (Identical to CapturePage) */
-          <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5 sm:gap-4 lg:gap-5">
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-2 sm:gap-4 lg:gap-5">
             {filteredNotes.map((note) => (
               <div
                 key={note.id}
                 onClick={() => handleOpenNote(note.id)}
-                className="p-3 sm:p-4 md:p-5 rounded-xl sm:rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer flex flex-col justify-between transition-all shadow-xs group"
+                className="p-2.5 sm:p-4 md:p-5 rounded-xl sm:rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer flex flex-col justify-between transition-all shadow-xs group"
               >
                 <div>
                   {/* Card Header (Category, Similarity Badge & Date unboxed) */}
                   <div className="flex items-center justify-between text-[10px] sm:text-xs font-mono text-[#9C9388] dark:text-[#736C62] mb-1.5 sm:mb-2.5 gap-1">
                     <div className="flex items-center gap-1.5 min-w-0 truncate">
                       <span
-                        className={`uppercase tracking-wider font-semibold text-[10px] sm:text-[11px] shrink-0 ${
+                        className={`inline-flex items-center gap-1 uppercase tracking-wider font-semibold text-[10px] sm:text-[11px] shrink-0 ${
                           note.type === 'reference'
                             ? 'text-[#1E3A8A] dark:text-[#60A5FA]'
                             : note.type === 'idea'
                             ? 'text-[#B45309] dark:text-[#F59E0B]'
+                            : note.type === 'synthesis'
+                            ? 'text-[#6D28D9] dark:text-[#A78BFA]'
                             : 'text-[#9A3412] dark:text-[#EA580C]'
                         }`}
                       >
-                        {note.type || 'thought'}
+                        {note.type === 'synthesis' && <Sparkles size={10} />}
+                        <span>{note.type || 'thought'}</span>
                       </span>
                       {isSemanticSearch && search.trim() && semanticMatches.has(note.id) && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[9px] sm:text-[10px] font-mono font-medium bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] border border-[#9A3412]/20 shrink-0">
@@ -722,7 +758,7 @@ export const LibraryPage: React.FC = () => {
                 </div>
 
                 {/* Footer (Tags & Actions) */}
-                <div className="mt-3 sm:mt-5 pt-2 sm:pt-3 border-t border-[#E8E2D8]/70 dark:border-[#2F2B28]/70 flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-[#9C9388]">
+                <div className="mt-2.5 sm:mt-5 pt-1.5 sm:pt-3 border-t border-[#E8E2D8]/70 dark:border-[#2F2B28]/70 flex items-center justify-between text-[10px] sm:text-[11px] font-mono text-[#9C9388]">
                   <div className="flex items-center gap-1 text-[10px] sm:text-[11px] text-[#9C9388] font-mono truncate pr-1">
                     {note.tags && note.tags.length > 0 && (
                       <>
@@ -772,26 +808,29 @@ export const LibraryPage: React.FC = () => {
           </div>
         ) : (
           /* List Mode */
-          <div className="space-y-2.5 sm:space-y-3">
+          <div className="space-y-2 sm:space-y-3">
             {filteredNotes.map((note) => (
               <div
                 key={note.id}
                 onClick={() => handleOpenNote(note.id)}
-                className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer group transition-all shadow-xs"
+                className="p-3 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer group transition-all shadow-xs"
               >
                 {/* Top Row: Category Type & Semantic Match on left, Date + Actions on top-right */}
                 <div className="flex items-center justify-between gap-3 mb-1.5">
                   <div className="flex items-center gap-2 min-w-0">
                     <span
-                      className={`uppercase tracking-wider font-semibold text-[10px] sm:text-[11px] font-mono shrink-0 ${
+                      className={`inline-flex items-center gap-1 uppercase tracking-wider font-semibold text-[10px] sm:text-[11px] font-mono shrink-0 ${
                         note.type === 'reference'
                           ? 'text-[#1E3A8A] dark:text-[#60A5FA]'
                           : note.type === 'idea'
                           ? 'text-[#B45309] dark:text-[#F59E0B]'
+                          : note.type === 'synthesis'
+                          ? 'text-[#6D28D9] dark:text-[#A78BFA]'
                           : 'text-[#9A3412] dark:text-[#EA580C]'
                       }`}
                     >
-                      {note.type || 'thought'}
+                      {note.type === 'synthesis' && <Sparkles size={10} />}
+                      <span>{note.type || 'thought'}</span>
                     </span>
                     {isSemanticSearch && search.trim() && semanticMatches.has(note.id) && (
                       <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono font-medium bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] border border-[#9A3412]/20 shrink-0">

@@ -251,7 +251,16 @@ export const StreamColumn: React.FC = () => {
 
                 {/* Unboxed Metadata with Typographic Separator */}
                 <div className="flex items-center gap-1.5 text-[11px] text-[#9C9388] dark:text-[#736C62] mt-2 font-mono flex-wrap">
-                  <span className="uppercase text-[10px] text-[#9A3412] dark:text-[#EA580C] font-semibold">{note.type || 'thought'}</span>
+                  <span
+                    className={`inline-flex items-center gap-1 uppercase text-[10px] font-semibold ${
+                      note.type === 'synthesis'
+                        ? 'text-[#6D28D9] dark:text-[#A78BFA]'
+                        : 'text-[#9A3412] dark:text-[#EA580C]'
+                    }`}
+                  >
+                    {note.type === 'synthesis' && <Sparkles size={9} />}
+                    <span>{note.type || 'thought'}</span>
+                  </span>
                   <span aria-hidden="true">·</span>
                   <span>{formatCardDate(note.updatedAt || note.createdAt)}</span>
                   {isSemanticSearch && searchQuery.trim() && semanticMatches.has(note.id) && (

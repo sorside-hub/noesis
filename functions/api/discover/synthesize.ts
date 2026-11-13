@@ -7,7 +7,17 @@ interface Env {
 
 export const onRequestPost = async (context: { request: Request; env: Env }) => {
   try {
-    const body = (await context.request.json()) as { topic?: string; style?: string; items?: any[] };
+    const body = (await context.request.json()) as {
+      topic?: string;
+      style?: string;
+      items?: any[];
+      existingSynthesis?: {
+        id?: string;
+        title?: string;
+        htmlContent?: string;
+        tags?: string[];
+      };
+    };
     const payload = await synthesizeWithGemini(context.env?.GEMINI_API_KEY, body);
 
     return new Response(JSON.stringify(payload), {

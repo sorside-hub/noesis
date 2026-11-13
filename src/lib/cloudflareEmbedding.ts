@@ -6,7 +6,6 @@ export const getCloudflareAccountId = (): string => {
   return (
     import.meta.env.VITE_CLOUDFLARE_ACCOUNT_ID ||
     import.meta.env.CLOUDFLARE_ACCOUNT_ID ||
-    localStorage.getItem('noesis_cf_account_id') ||
     ''
   ).trim();
 };
@@ -15,7 +14,6 @@ export const getCloudflareApiToken = (): string => {
   return (
     import.meta.env.VITE_CLOUDFLARE_API_TOKEN ||
     import.meta.env.CLOUDFLARE_API_TOKEN ||
-    localStorage.getItem('noesis_cf_api_token') ||
     ''
   ).trim();
 };

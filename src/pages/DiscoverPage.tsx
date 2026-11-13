@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useNoesis } from '../context/NoesisContext';
 import {
   DiscoverSourceItem,
   TopicClusterSummary,
@@ -15,7 +16,14 @@ import { Sparkles, GitBranch, Layers } from 'lucide-react';
 type DiscoverTab = 'synthesis' | 'connections' | 'clusters';
 
 export const DiscoverPage: React.FC = () => {
+  const { synthesisTargetNoteId } = useNoesis();
   const [activeTab, setActiveTab] = useState<DiscoverTab>('synthesis');
+
+  useEffect(() => {
+    if (synthesisTargetNoteId) {
+      setActiveTab('synthesis');
+    }
+  }, [synthesisTargetNoteId]);
 
   // Shared vector map for Connections & Topic Clusters
   const [vectorMap, setVectorMap] = useState<VectorMapResult | null>(null);
@@ -77,21 +85,21 @@ export const DiscoverPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3.5 sm:px-8 lg:px-14 py-5 sm:py-8">
-      <div className="max-w-5xl mx-auto space-y-6 sm:space-y-8">
+    <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8">
+      <div className="max-w-5xl mx-auto space-y-4 sm:space-y-8">
         {/* Clean Header + 3-Section Switcher */}
-        <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-4 flex flex-col sm:flex-row sm:items-end justify-between gap-4">
+        <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3 sm:pb-4 flex flex-col sm:flex-row sm:items-end justify-between gap-3 sm:gap-4">
           <div>
-            <h1 className="font-serif text-3xl sm:text-4xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1]">
+            <h1 className="font-serif text-2xl sm:text-4xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1]">
               Discover
             </h1>
-            <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-1">
+            <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-0.5 sm:mt-1">
               Temukan keterkaitan catatan dan susun pengetahuan yang tercecer menjadi dokumen utuh.
             </p>
           </div>
 
           {/* 3-Tab Switcher */}
-          <div className="flex items-center p-1 bg-[#F5EFEB] dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] self-start sm:self-auto shrink-0 overflow-x-auto max-w-full">
+          <div className="flex items-center p-1 bg-[#F5EFEB] dark:bg-[#1E1C1A] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] self-start sm:self-auto shrink-0 overflow-x-auto [&::-webkit-scrollbar]:hidden [-ms-overflow-style:none] [scrollbar-width:none] max-w-full">
             {[
               { id: 'synthesis', label: 'Synthesis', icon: Sparkles },
               { id: 'connections', label: 'Connections', icon: GitBranch },

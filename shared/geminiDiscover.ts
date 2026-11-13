@@ -106,21 +106,51 @@ export const stripHtml = (raw: string): string => {
     .trim();
 };
 
+export const stripSynthesisSourcesFooter = (rawHtml: string): string => {
+  if (!rawHtml) return '';
+  return rawHtml
+    .replace(
+      /(?:<hr\s*\/?>\s*)?<p>\s*<strong>\s*Sumber Pengetahuan\s*\(\d+\):\s*<\/strong>\s*<\/p>\s*<ul>[\s\S]*?<\/ul>\s*$/i,
+      ''
+    )
+    .trim();
+};
+
 export async function synthesizeWithGemini(
   apiKey: string | undefined,
-  body: { topic?: string; style?: string; items?: any[] }
+  body: {
+    topic?: string;
+    style?: string;
+    items?: any[];
+    existingSynthesis?: {
+      id?: string;
+      title?: string;
+      htmlContent?: string;
+      tags?: string[];
+    };
+  }
 ) {
-  const { topic, style = 'structured', items } = body || {};
+  const { topic, style = 'structured', items, existingSynthesis } = body || {};
+  const isIncrementalUpdate = Boolean(
+    existingSynthesis &&
+      typeof existingSynthesis.htmlContent === 'string' &&
+      existingSynthesis.htmlContent.trim().length > 0
+  );
 
-  if (!Array.isArray(items) || items.length < 2) {
-    throw new DiscoverApiError('Minimal pilih 2 catatan atau fragment untuk disintesis.', 400);
+  if (!Array.isArray(items) || items.length < (isIncrementalUpdate ? 1 : 2)) {
+    throw new DiscoverApiError(
+      isIncrementalUpdate
+        ? 'Pilih minimal 1 catatan atau fragment baru untuk memperbarui sintesis.'
+        : 'Minimal pilih 2 catatan atau fragment untuk disintesis.',
+      400
+    );
   }
 
   const formattedSources = items
     .map((item: any, idx: number) => {
       const cleanBody = stripHtml(String(item.content || '')).slice(0, 6000);
       const tagsStr = Array.isArray(item.tags) && item.tags.length > 0 ? item.tags.join(', ') : '-';
-      return `### Sumber [${idx + 1}] (${item.kind === 'fragment' ? 'Fragment' : 'Catatan'} · Tipe: ${item.type || 'thought'})
+      return `### ${isIncrementalUpdate ? 'Materi Baru' : 'Sumber'} [${idx + 1}] (${item.kind === 'fragment' ? 'Fragment' : 'Catatan'} · Tipe: ${item.type || 'thought'})
 Judul: ${item.title || 'Tanpa Judul'}
 Tags: ${tagsStr}
 Isi:
@@ -135,7 +165,31 @@ ${cleanBody}`;
       ? 'Susun secara ringkas dan padat berisi poin-poin inti, argumen kunci, dan sintesis kesimpulan praktis.'
       : 'Susun sebagai dokumen pengetahuan terstruktur (Master Note) dengan sub-bab tematik yang logis (Pendahuluan, Pembahasan Terpadu, Perbedaan/Nuansa Sudut Pandang jika ada, dan Kesimpulan).';
 
-  const prompt = `Tugasmu adalah menyintesis kumpulan catatan dan fragment milik pengguna menjadi SATU dokumen pengetahuan yang utuh, terstruktur, dan mudah dipahami.
+  const cleanedBaseHtml = isIncrementalUpdate
+    ? stripSynthesisSourcesFooter(String(existingSynthesis?.htmlContent || '')).slice(0, 24000)
+    : '';
+  const cleanedBaseTitle = String(existingSynthesis?.title || 'Dokumen Sintesis').trim();
+
+  const prompt = isIncrementalUpdate
+    ? `Tugasmu adalah MEMPERBARUI dokumen sintesis pengetahuan yang sudah ada dengan mengintegrasikan materi baru milik pengguna tanpa membuang fondasi pemikiran sebelumnya.
+
+${topic ? `Fokus Pembaruan / Pertanyaan Tambahan: "${topic}"\n` : ''}Gaya Penulisan Target: ${styleInstruction}
+
+ATURAN KETAT PEMBARUAN (1 + N -> 1):
+1. Jadikan "DOKUMEN SINTESIS SAAT INI" sebagai fondasi utama. Pertahankan struktur, gagasan matang, dan formulasi kalimat yang masih relevan (termasuk bagian yang mungkin sudah disunting manual oleh penulis).
+2. Integrasikan wawasan, argumen, kutipan, atau nuansa dari "MATERI BARU" ke dalam sub-bab yang paling relevan, atau buat sub-bab baru (<h2>/<h3>) bila materi baru membawa dimensi tema yang belum ada.
+3. JANGAN sekadar menempelkan materi baru di paragraf paling bawah sebagai lampiran terpisah. Leleburkan menjadi satu alur yang kohesif dan perbarui kesimpulan bila diperlukan.
+4. Gunakan HANYA pengetahuan dari Dokumen Sintesis Saat Ini dan Materi Baru di bawah ini. Jangan mengarang fakta eksternal.
+5. Gunakan bahasa yang sama dengan dokumen (umumnya Bahasa Indonesia yang jernih dan editorial).
+6. Format "htmlContent" HARUS berupa HTML bersih (<h2>, <h3>, <p>, <ul>, <li>, <blockquote>, <strong>, <em>) tanpa tag <html>/<body>, tanpa <h1>, dan TANPA daftar "Sumber Pengetahuan" di akhir (daftar sumber akan digabungkan otomatis oleh sistem).
+7. Pada field "synthesisNotes", jelaskan ringkas apa saja pembaruan atau wawasan baru yang berhasil diintegrasikan ke dokumen lama.
+
+DOKUMEN SINTESIS SAAT INI (Judul: "${cleanedBaseTitle}"):
+${cleanedBaseHtml}
+
+=== MATERI BARU YANG PERLU DIINTEGRASIKAN (${items.length} item) ===
+${formattedSources}`
+    : `Tugasmu adalah menyintesis kumpulan catatan dan fragment milik pengguna menjadi SATU dokumen pengetahuan yang utuh, terstruktur, dan mudah dipahami.
 
 ${topic ? `Topik / Pertanyaan Fokus: "${topic}"\n` : ''}Gaya Penulisan: ${styleInstruction}
 

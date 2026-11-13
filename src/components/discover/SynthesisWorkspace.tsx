@@ -6,7 +6,6 @@ import Link from '@tiptap/extension-link';
 import { useNoesis } from '../../context/NoesisContext';
 import {
   DiscoverSourceItem,
-  NoteType,
   SynthesisResult,
   SynthesisStyle,
 } from '../../types';
@@ -14,6 +13,7 @@ import {
   noteToDiscoverItem,
   fragmentToDiscoverItem,
   requestSynthesizeDocument,
+  parseLegacySynthesisFooterItems,
 } from '../../lib/discoverAi';
 import {
   Sparkles,
@@ -50,11 +50,20 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
   const {
     notes,
     fragments,
+    approvedConnections,
     performUnifiedSemanticSearch,
     saveSynthesizedNote,
+    updateSynthesizedNote,
+    synthesisTargetNoteId,
+    clearSynthesisTarget,
     setActiveNoteId,
     setActiveView,
   } = useNoesis();
+
+  // Workspace Mode: 'create' (brand new synthesis) vs 'update' (evolve existing synthesis 1 + N -> 1)
+  const [workspaceMode, setWorkspaceMode] = useState<'create' | 'update'>('create');
+  const [baseSynthesisId, setBaseSynthesisId] = useState<string | null>(null);
+  const [hideAlreadyIncludedInManual, setHideAlreadyIncludedInManual] = useState(true);
 
   // Synthesis Input & Selection States
   const [topicQuery, setTopicQuery] = useState('');
@@ -79,14 +88,113 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
   const [draftHtml, setDraftHtml] = useState('');
   const [draftTags, setDraftTags] = useState<string[]>([]);
   const [newTagInput, setNewTagInput] = useState('');
-  const [targetNoteType, setTargetNoteType] = useState<NoteType>('thought');
   const [savedNoteId, setSavedNoteId] = useState<string | null>(null);
+  const [savedUpdateSummary, setSavedUpdateSummary] = useState<{
+    isUpdate: boolean;
+    prevCount: number;
+    newCount: number;
+    totalCount: number;
+  } | null>(null);
+
+  // Existing non-archived Synthesis documents sorted by latest update
+  const synthesisNotes = useMemo(() => {
+    return notes
+      .filter((n) => !n.archived && n.type === 'synthesis')
+      .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+  }, [notes]);
+
+  const baseSynthesisNote = useMemo(() => {
+    if (workspaceMode !== 'update' || !baseSynthesisId) return null;
+    return synthesisNotes.find((n) => n.id === baseSynthesisId) || null;
+  }, [workspaceMode, baseSynthesisId, synthesisNotes]);
+
+  // Resolve all sources already baked into baseSynthesisNote (Notes via relatedNoteIds, Fragments via approvedConnections + legacy footer)
+  const { existingResolvedSources, alreadyIncludedIds } = useMemo(() => {
+    if (!baseSynthesisNote) {
+      return {
+        existingResolvedSources: [] as DiscoverSourceItem[],
+        alreadyIncludedIds: new Set<string>(),
+      };
+    }
+
+    const resolvedMap = new Map<string, DiscoverSourceItem>();
+
+    // 1. Notes recorded in relatedNoteIds
+    for (const relId of baseSynthesisNote.relatedNoteIds || []) {
+      if (relId === baseSynthesisNote.id) continue;
+      const foundNote = notes.find((n) => n.id === relId);
+      if (foundNote) {
+        resolvedMap.set(foundNote.id, noteToDiscoverItem(foundNote));
+      }
+    }
+
+    // 2. Fragments linked in approvedConnections
+    for (const pairKey of approvedConnections) {
+      const parts = pairKey.split('::');
+      if (parts.length !== 2) continue;
+      const otherId =
+        parts[0] === baseSynthesisNote.id
+          ? parts[1]
+          : parts[1] === baseSynthesisNote.id
+          ? parts[0]
+          : null;
+      if (!otherId || resolvedMap.has(otherId)) continue;
+      const foundFrag = fragments.find((f) => f.id === otherId);
+      if (foundFrag) {
+        resolvedMap.set(foundFrag.id, fragmentToDiscoverItem(foundFrag));
+      }
+    }
+
+    // 3. Legacy fallback from HTML footer ("Sumber Pengetahuan") for older synthesis docs
+    const legacyEntries = parseLegacySynthesisFooterItems(baseSynthesisNote.content || '');
+    for (const entry of legacyEntries) {
+      const targetTitle = entry.title.toLowerCase();
+      if (entry.kind === 'fragment') {
+        const frag = fragments.find(
+          (f) => !resolvedMap.has(f.id) && (f.title || 'Tanpa Judul').trim().toLowerCase() === targetTitle
+        );
+        if (frag) resolvedMap.set(frag.id, fragmentToDiscoverItem(frag));
+      } else {
+        const note = notes.find(
+          (n) =>
+            n.id !== baseSynthesisNote.id &&
+            !resolvedMap.has(n.id) &&
+            (n.title || 'Tanpa Judul').trim().toLowerCase() === targetTitle
+        );
+        if (note) resolvedMap.set(note.id, noteToDiscoverItem(note));
+      }
+    }
+
+    return {
+      existingResolvedSources: Array.from(resolvedMap.values()),
+      alreadyIncludedIds: new Set(resolvedMap.keys()),
+    };
+  }, [baseSynthesisNote, notes, fragments, approvedConnections]);
+
+  // Receive handoff when user clicks "Perbarui Sintesis" from Editor
+  useEffect(() => {
+    if (!synthesisTargetNoteId) return;
+    setWorkspaceMode('update');
+    setBaseSynthesisId(synthesisTargetNoteId);
+    setSavedNoteId(null);
+    setSavedUpdateSummary(null);
+    setSynthesisOutput(null);
+    setSynthesisError(null);
+    setCandidateItems([]);
+    setSelectedIds(new Set());
+    setSearchExecuted(false);
+    setTopicQuery('');
+    clearSynthesisTarget();
+  }, [synthesisTargetNoteId, clearSynthesisTarget]);
 
   // Receive seeded items from Connections or Topic Clusters
   useEffect(() => {
     if (!incomingSeed || incomingSeed.items.length === 0) return;
 
+    setWorkspaceMode('create');
+    setBaseSynthesisId(null);
     setSavedNoteId(null);
+    setSavedUpdateSummary(null);
     setSynthesisOutput(null);
     setSynthesisError(null);
     setSearchExecuted(true);
@@ -107,14 +215,14 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     setSelectedIds(new Set(incomingSeed.items.map((item) => item.id)));
   }, [incomingSeed]);
 
-  // All available Notes & Fragments unified for manual selection
+  // All available Notes & Fragments unified for manual selection (never include the baseSynthesisNote itself)
   const allLibraryItems = useMemo<DiscoverSourceItem[]>(() => {
     const activeNotes = notes
-      .filter((n) => !n.archived)
+      .filter((n) => !n.archived && n.id !== baseSynthesisNote?.id)
       .map((n) => noteToDiscoverItem(n));
     const allFrags = fragments.map((f) => fragmentToDiscoverItem(f));
     return [...activeNotes, ...allFrags];
-  }, [notes, fragments]);
+  }, [notes, fragments, baseSynthesisNote?.id]);
 
   // Extract top real tags from user's archive as quick topic chips
   const topArchiveTags = useMemo(() => {
@@ -135,7 +243,10 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
 
   // Filtered list inside Manual Picker
   const manualPickerItems = useMemo(() => {
-    return allLibraryItems.filter((item) => {
+    const filtered = allLibraryItems.filter((item) => {
+      if (baseSynthesisNote && hideAlreadyIncludedInManual && alreadyIncludedIds.has(item.id)) {
+        return false;
+      }
       if (manualKindFilter !== 'all' && item.kind !== manualKindFilter) return false;
       if (manualFilterText.trim()) {
         const q = manualFilterText.toLowerCase();
@@ -146,9 +257,24 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
       }
       return true;
     });
-  }, [allLibraryItems, manualKindFilter, manualFilterText]);
 
-  // Active selected items list (preserve order from candidates + any manually picked items)
+    if (!baseSynthesisNote) return filtered;
+    // Always float un-included items first when updating
+    return [...filtered].sort((a, b) => {
+      const aIn = alreadyIncludedIds.has(a.id) ? 1 : 0;
+      const bIn = alreadyIncludedIds.has(b.id) ? 1 : 0;
+      return aIn - bIn;
+    });
+  }, [
+    allLibraryItems,
+    manualKindFilter,
+    manualFilterText,
+    baseSynthesisNote,
+    hideAlreadyIncludedInManual,
+    alreadyIncludedIds,
+  ]);
+
+  // Active selected items list (always excludes baseSynthesisNote & alreadyIncludedIds in update mode)
   const selectedItems = useMemo(() => {
     const map = new Map<string, DiscoverSourceItem>();
     for (const item of candidateItems) map.set(item.id, item);
@@ -157,11 +283,14 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     }
     const list: DiscoverSourceItem[] = [];
     selectedIds.forEach((id) => {
+      if (baseSynthesisNote && (id === baseSynthesisNote.id || alreadyIncludedIds.has(id))) {
+        return;
+      }
       const found = map.get(id);
       if (found) list.push(found);
     });
     return list;
-  }, [candidateItems, allLibraryItems, selectedIds]);
+  }, [candidateItems, allLibraryItems, selectedIds, baseSynthesisNote, alreadyIncludedIds]);
 
   // Tiptap WYSIWYG editor for editing synthesized document before saving
   const previewEditor = useEditor({
@@ -204,13 +333,20 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     setSearchExecuted(true);
     setSynthesisError(null);
     setSavedNoteId(null);
+    setSavedUpdateSummary(null);
 
     try {
-      const results = await performUnifiedSemanticSearch(query);
-      setCandidateItems(results);
-      // Pre-select top relevant items (up to 10) while preserving any manually chosen ones
+      const rawResults = await performUnifiedSemanticSearch(query);
+      const filteredResults = baseSynthesisNote
+        ? rawResults.filter((item) => item.id !== baseSynthesisNote.id)
+        : rawResults;
+      setCandidateItems(filteredResults);
+      // Pre-select top relevant NEW items (up to 10), skipping items already inside baseSynthesisNote
       const nextSelected = new Set(selectedIds);
-      results.slice(0, 10).forEach((item) => nextSelected.add(item.id));
+      filteredResults
+        .filter((item) => !alreadyIncludedIds.has(item.id))
+        .slice(0, 10)
+        .forEach((item) => nextSelected.add(item.id));
       setSelectedIds(nextSelected);
     } catch (err: any) {
       setSynthesisError(err?.message || 'Gagal mencari bahan catatan.');
@@ -220,6 +356,10 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
   };
 
   const toggleItemSelection = (item: DiscoverSourceItem) => {
+    if (baseSynthesisNote && (item.id === baseSynthesisNote.id || alreadyIncludedIds.has(item.id))) {
+      return;
+    }
+
     setSelectedIds((prev) => {
       const next = new Set(prev);
       if (next.has(item.id)) {
@@ -236,24 +376,43 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     });
   };
 
+  const minRequiredItems = baseSynthesisNote ? 1 : 2;
+
   const handleRunSynthesis = async () => {
-    if (selectedItems.length < 2) return;
+    if (selectedItems.length < minRequiredItems) return;
 
     setIsSynthesizing(true);
     setSynthesisError(null);
     setSavedNoteId(null);
+    setSavedUpdateSummary(null);
 
     try {
       const result = await requestSynthesizeDocument({
         topic: topicQuery.trim() || undefined,
         style: synthesisStyle,
         items: selectedItems,
+        existingSynthesis: baseSynthesisNote
+          ? {
+              id: baseSynthesisNote.id,
+              title: baseSynthesisNote.title,
+              htmlContent: baseSynthesisNote.content,
+              tags: baseSynthesisNote.tags,
+            }
+          : undefined,
       });
 
       setSynthesisOutput(result);
-      setDraftTitle(result.title || 'Dokumen Sintesis');
+      setDraftTitle(result.title || baseSynthesisNote?.title || 'Dokumen Sintesis');
       setDraftHtml(result.htmlContent || '');
-      setDraftTags(result.suggestedTags || []);
+      const mergedTags = baseSynthesisNote
+        ? Array.from(
+            new Set([
+              ...(baseSynthesisNote.tags || []),
+              ...(result.suggestedTags || []),
+            ])
+          )
+        : result.suggestedTags || [];
+      setDraftTags(mergedTags);
     } catch (err: any) {
       setSynthesisError(err?.message || 'Gagal menyusun sintesis dokumen.');
     } finally {
@@ -263,12 +422,43 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
 
   const handleSaveToLibrary = () => {
     if (!synthesisOutput) return;
+    if (baseSynthesisNote) {
+      const mergedMap = new Map<string, DiscoverSourceItem>();
+      existingResolvedSources.forEach((s) => mergedMap.set(s.id, s));
+      selectedItems.forEach((s) => mergedMap.set(s.id, s));
+      const allResolved = Array.from(mergedMap.values());
+
+      const ok = updateSynthesizedNote({
+        targetNoteId: baseSynthesisNote.id,
+        title: draftTitle,
+        htmlContent: draftHtml,
+        tags: draftTags,
+        newSourceItems: selectedItems,
+        allResolvedSourceItems: allResolved,
+      });
+      if (ok) {
+        setSavedUpdateSummary({
+          isUpdate: true,
+          prevCount: existingResolvedSources.length,
+          newCount: selectedItems.length,
+          totalCount: allResolved.length,
+        });
+        setSavedNoteId(baseSynthesisNote.id);
+      }
+      return;
+    }
+
     const newId = saveSynthesizedNote({
       title: draftTitle,
       htmlContent: draftHtml,
       tags: draftTags,
       sourceItems: selectedItems,
-      type: targetNoteType,
+    });
+    setSavedUpdateSummary({
+      isUpdate: false,
+      prevCount: 0,
+      newCount: selectedItems.length,
+      totalCount: selectedItems.length,
     });
     setSavedNoteId(newId);
   };
@@ -285,6 +475,7 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
   const handleResetSynthesis = () => {
     setSynthesisOutput(null);
     setSavedNoteId(null);
+    setSavedUpdateSummary(null);
     setSynthesisError(null);
     setDraftTitle('');
     setDraftHtml('');
@@ -299,8 +490,27 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     handleResetSynthesis();
   };
 
+  const handleSwitchMode = (nextMode: 'create' | 'update') => {
+    if (nextMode === workspaceMode) return;
+    setWorkspaceMode(nextMode);
+    if (nextMode === 'update') {
+      setBaseSynthesisId(synthesisNotes[0]?.id || null);
+    } else {
+      setBaseSynthesisId(null);
+    }
+    handleResetAllMaterials();
+  };
+
+  const handleSelectBaseSynthesis = (id: string) => {
+    setBaseSynthesisId(id);
+    handleResetAllMaterials();
+  };
+
   const selectedNotesCount = selectedItems.filter((i) => i.kind === 'note').length;
   const selectedFragmentsCount = selectedItems.filter((i) => i.kind === 'fragment').length;
+  const totalMergedPreviewCount = baseSynthesisNote
+    ? existingResolvedSources.length + selectedItems.length
+    : selectedItems.length;
 
   return (
     <div className="space-y-6">
@@ -313,12 +523,24 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
             </div>
             <div>
               <h2 className="font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Dokumen Sintesis Tersimpan ke Library
+                {savedUpdateSummary?.isUpdate
+                  ? 'Dokumen Sintesis Berhasil Diperbarui'
+                  : 'Dokumen Sintesis Tersimpan ke Library'}
               </h2>
               <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-1 leading-relaxed">
-                <strong>“{draftTitle}”</strong> telah disimpan sebagai pengetahuan baru dan otomatis tertaut ke{' '}
-                {selectedNotesCount} catatan sumber
-                {selectedFragmentsCount > 0 ? ` serta merujuk ${selectedFragmentsCount} fragments` : ''}. Semua catatan aslimu tetap utuh.
+                {savedUpdateSummary?.isUpdate ? (
+                  <>
+                    <strong>“{draftTitle}”</strong> telah diperbarui di tempat dengan{' '}
+                    <strong>+{savedUpdateSummary.newCount} materi baru</strong> (total sekarang{' '}
+                    <strong>{savedUpdateSummary.totalCount} sumber tertaut</strong>) tanpa menduplikasi dokumen. Semua catatan aslimu tetap utuh.
+                  </>
+                ) : (
+                  <>
+                    <strong>“{draftTitle}”</strong> telah disimpan sebagai pengetahuan baru dan otomatis tertaut ke{' '}
+                    {selectedNotesCount} catatan sumber
+                    {selectedFragmentsCount > 0 ? ` serta merujuk ${selectedFragmentsCount} fragments` : ''}. Semua catatan aslimu tetap utuh.
+                  </>
+                )}
               </p>
             </div>
           </div>
@@ -349,7 +571,9 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
               className="px-4 py-2.5 rounded-xl text-xs font-medium text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors flex items-center gap-1.5"
             >
               <RotateCcw size={13} />
-              <span>Buat Sintesis Baru</span>
+              <span>
+                {savedUpdateSummary?.isUpdate ? 'Perbarui Sintesis Lagi' : 'Buat Sintesis Baru'}
+              </span>
             </button>
           </div>
         </div>
@@ -500,15 +724,34 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
             {/* Attribution Footer Preview */}
             <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
               <span className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388]">
-                Catatan Sumber yang Akan Tertaut ({selectedItems.length})
+                {baseSynthesisNote
+                  ? `Total Sumber Tertaut (${existingResolvedSources.length} lama + ${selectedItems.length} baru = ${totalMergedPreviewCount})`
+                  : `Catatan Sumber yang Akan Tertaut (${selectedItems.length})`}
               </span>
               <div className="flex flex-wrap gap-1.5">
+                {baseSynthesisNote &&
+                  existingResolvedSources.map((item) => (
+                    <span
+                      key={`old-${item.id}`}
+                      className="px-2.5 py-1 rounded-lg text-[11px] bg-[#F5EFEB] dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#9C9388] dark:text-[#736C62]"
+                    >
+                      <span className="font-mono text-[10px] mr-1">
+                        {item.kind === 'fragment' ? 'Fragment' : 'Catatan'}
+                      </span>
+                      {item.title}
+                    </span>
+                  ))}
                 {selectedItems.map((item) => (
                   <span
                     key={item.id}
-                    className="px-2.5 py-1 rounded-lg text-[11px] bg-[#FAF7F2] dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]"
+                    className={`px-2.5 py-1 rounded-lg text-[11px] border ${
+                      baseSynthesisNote
+                        ? 'bg-violet-50/70 dark:bg-violet-950/30 border-violet-200 dark:border-violet-900/50 text-[#221F1D] dark:text-[#EDE8E1]'
+                        : 'bg-[#FAF7F2] dark:bg-[#272422] border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]'
+                    }`}
                   >
                     <span className="font-mono text-[10px] text-[#9A3412] dark:text-[#EA580C] mr-1">
+                      {baseSynthesisNote ? '+ Baru · ' : ''}
                       {item.kind === 'fragment' ? 'Fragment' : 'Catatan'}
                     </span>
                     {item.title}
@@ -520,24 +763,16 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
 
           {/* Save Action Footer */}
           <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-[#6B635B] dark:text-[#A8A196]">Simpan sebagai:</span>
-              <div className="flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
-                {(['thought', 'idea', 'reference'] as NoteType[]).map((t) => (
-                  <button
-                    key={t}
-                    type="button"
-                    onClick={() => setTargetNoteType(t)}
-                    className={`px-2.5 py-1 rounded-lg text-[11px] font-medium capitalize transition-colors ${
-                      targetNoteType === t
-                        ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-2xs'
-                        : 'text-[#6B635B] dark:text-[#A8A196]'
-                    }`}
-                  >
-                    {t}
-                  </button>
-                ))}
-              </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-mono uppercase tracking-wider bg-violet-50 dark:bg-violet-950/40 text-[#6D28D9] dark:text-[#A78BFA] border border-violet-200 dark:border-violet-900/50">
+                <Sparkles size={11} />
+                <span>Synthesis</span>
+              </span>
+              <span className="text-xs text-[#6B635B] dark:text-[#A8A196]">
+                {baseSynthesisNote
+                  ? `Memperbarui “${baseSynthesisNote.title || 'Dokumen Sintesis'}” di tempat`
+                  : 'Otomatis masuk ke tab Synthesis di Library'}
+              </span>
             </div>
 
             <div className="flex items-center gap-2.5">
@@ -556,25 +791,126 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
                 className="px-5 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors flex items-center gap-2 shadow-xs"
               >
                 <Check size={14} />
-                <span>Simpan ke Library</span>
+                <span>
+                  {baseSynthesisNote ? 'Simpan Pembaruan Sintesis' : 'Simpan ke Library'}
+                </span>
               </button>
             </div>
           </div>
         </div>
       ) : (
         /* ============================================================
-           TOPIC SEARCH / MANUAL PICKER + CURATION
+           MODE SELECTOR + TOPIC SEARCH / MANUAL PICKER + CURATION
            ============================================================ */
         <>
+          {/* Mode Toggle + Base Synthesis Picker (shown whenever user has existing synthesis docs) */}
+          {synthesisNotes.length > 0 && (
+            <div className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-3.5">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div>
+                  <span className="text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] block">
+                    Mode Sintesis
+                  </span>
+                  <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5">
+                    {workspaceMode === 'update'
+                      ? 'Tambahkan catatan baru ke dokumen sintesis lama tanpa mulai dari nol (1 + N → 1).'
+                      : 'Gabungkan catatan atau fragment menjadi satu dokumen sintesis baru.'}
+                  </p>
+                </div>
+
+                <div className="flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] self-start sm:self-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchMode('create')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      workspaceMode === 'create'
+                        ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-2xs'
+                        : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                    }`}
+                  >
+                    <Plus size={13} />
+                    <span>Sintesis Baru</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleSwitchMode('update')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-1.5 ${
+                      workspaceMode === 'update'
+                        ? 'bg-white dark:bg-[#272422] text-[#6D28D9] dark:text-[#A78BFA] shadow-2xs'
+                        : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                    }`}
+                  >
+                    <Sparkles size={12} />
+                    <span>Perbarui Sintesis Lama</span>
+                  </button>
+                </div>
+              </div>
+
+              {workspaceMode === 'update' && (
+                <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
+                  <div className="flex flex-col sm:flex-row sm:items-center gap-2.5">
+                    <label className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] shrink-0">
+                      Dokumen Induk:
+                    </label>
+                    <select
+                      value={baseSynthesisNote?.id || ''}
+                      onChange={(e) => handleSelectBaseSynthesis(e.target.value)}
+                      className="flex-1 text-xs px-3 py-2 rounded-xl bg-[#FAF7F2] dark:bg-[#151413] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#6D28D9] dark:focus:border-[#A78BFA]"
+                    >
+                      {synthesisNotes.map((sn) => (
+                        <option key={sn.id} value={sn.id}>
+                          {sn.title || 'Dokumen Sintesis'} ({sn.relatedNoteIds?.length || 0} catatan tertaut)
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {baseSynthesisNote && (
+                    <div className="p-3 rounded-xl bg-violet-50/60 dark:bg-violet-950/20 border border-violet-200/80 dark:border-violet-900/40 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
+                            <Sparkles size={10} />
+                            <span>Fondasi Aktif</span>
+                          </span>
+                          <span className="text-[11px] font-mono text-[#6B635B] dark:text-[#A8A196]">
+                            · {existingResolvedSources.length} sumber sudah tergabung di dalamnya
+                          </span>
+                        </div>
+                        <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-1 mt-0.5">
+                          {baseSynthesisNote.excerpt || 'Siap diperbarui dengan materi tambahan.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setActiveNoteId(baseSynthesisNote.id);
+                          setActiveView('editor');
+                        }}
+                        className="text-[11px] font-medium text-[#6D28D9] dark:text-[#A78BFA] hover:underline shrink-0 self-start sm:self-center"
+                      >
+                        Buka di Editor
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Topic Search Card + Manual Picker Trigger */}
           <div className="p-4 sm:p-6 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
                 <h2 className="font-serif text-lg sm:text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                  Mulai Penggabungan Pengetahuan
+                  {baseSynthesisNote
+                    ? 'Pilih Materi Baru Untuk Ditambahkan'
+                    : 'Mulai Penggabungan Pengetahuan'}
                 </h2>
                 <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5">
-                  Masukkan topik untuk menjaring catatan & fragments relevan, atau pilih langsung secara manual.
+                  {baseSynthesisNote
+                    ? 'Cari lewat topik atau pilih manual catatan & fragments baru. Sumber yang sudah masuk ditandai otomatis.'
+                    : 'Masukkan topik untuk menjaring catatan & fragments relevan, atau pilih langsung secara manual.'}
                 </p>
               </div>
               <button
@@ -664,62 +1000,93 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
                     />
                   </div>
 
-                  <div className="flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] self-start">
-                    {[
-                      { id: 'all', label: 'Semua' },
-                      { id: 'note', label: 'Catatan' },
-                      { id: 'fragment', label: 'Fragments' },
-                    ].map((k) => (
+                  <div className="flex flex-wrap items-center gap-2">
+                    {baseSynthesisNote && alreadyIncludedIds.size > 0 && (
                       <button
-                        key={k.id}
                         type="button"
-                        onClick={() => setManualKindFilter(k.id as 'all' | 'note' | 'fragment')}
-                        className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
-                          manualKindFilter === k.id
-                            ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-2xs'
-                            : 'text-[#6B635B] dark:text-[#A8A196]'
+                        onClick={() => setHideAlreadyIncludedInManual((prev) => !prev)}
+                        className={`px-2.5 py-1.5 rounded-xl border text-[11px] font-medium transition-colors ${
+                          hideAlreadyIncludedInManual
+                            ? 'border-[#6D28D9] dark:border-[#A78BFA] bg-violet-50/70 dark:bg-violet-950/30 text-[#6D28D9] dark:text-[#A78BFA]'
+                            : 'border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]'
                         }`}
                       >
-                        {k.label}
+                        {hideAlreadyIncludedInManual ? 'Hanya Materi Baru' : 'Tampilkan Semua'}
                       </button>
-                    ))}
+                    )}
+
+                    <div className="flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] self-start">
+                      {[
+                        { id: 'all', label: 'Semua' },
+                        { id: 'note', label: 'Catatan' },
+                        { id: 'fragment', label: 'Fragments' },
+                      ].map((k) => (
+                        <button
+                          key={k.id}
+                          type="button"
+                          onClick={() => setManualKindFilter(k.id as 'all' | 'note' | 'fragment')}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                            manualKindFilter === k.id
+                              ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-2xs'
+                              : 'text-[#6B635B] dark:text-[#A8A196]'
+                          }`}
+                        >
+                          {k.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 </div>
 
                 {manualPickerItems.length === 0 ? (
                   <p className="text-xs text-[#9C9388] py-6 text-center">
-                    Tidak ada catatan atau fragment yang cocok.
+                    {baseSynthesisNote && hideAlreadyIncludedInManual
+                      ? 'Tidak ada materi baru yang cocok (semua materi yang cocok sudah masuk ke sintesis ini).'
+                      : 'Tidak ada catatan atau fragment yang cocok.'}
                   </p>
                 ) : (
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-64 overflow-y-auto pr-1">
                     {manualPickerItems.map((item) => {
-                      const isSelected = selectedIds.has(item.id);
+                      const isIncluded = Boolean(baseSynthesisNote && alreadyIncludedIds.has(item.id));
+                      const isSelected = !isIncluded && selectedIds.has(item.id);
                       return (
                         <button
                           key={item.id}
                           type="button"
+                          disabled={isIncluded}
                           onClick={() => toggleItemSelection(item)}
                           className={`p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
-                            isSelected
+                            isIncluded
+                              ? 'border-[#E8E2D8]/70 dark:border-[#2F2B28]/70 bg-[#F5EFEB]/50 dark:bg-[#151413]/50 opacity-65 cursor-not-allowed'
+                              : isSelected
                               ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#FAF7F2] dark:bg-[#272422]'
                               : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] hover:border-[#D6CEBE]'
                           }`}
                         >
                           <div
                             className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
-                              isSelected
+                              isIncluded
+                                ? 'bg-[#6D28D9]/20 dark:bg-[#A78BFA]/20 border-[#6D28D9]/40 text-[#6D28D9] dark:text-[#A78BFA]'
+                                : isSelected
                                 ? 'bg-[#9A3412] dark:bg-[#EA580C] border-[#9A3412] dark:border-[#EA580C] text-white'
                                 : 'border-[#D6CEBE] dark:border-[#443E3A]'
                             }`}
                           >
-                            {isSelected && <Check size={11} />}
+                            {(isSelected || isIncluded) && <Check size={11} />}
                           </div>
                           <div className="min-w-0 flex-1">
-                            <div className="flex items-center gap-1.5 text-[10px] font-mono">
-                              <span className="uppercase text-[#9A3412] dark:text-[#EA580C] font-semibold">
-                                {item.kind === 'fragment' ? 'Fragment' : 'Catatan'}
+                            <div className="flex items-center justify-between gap-1.5 text-[10px] font-mono">
+                              <span className="truncate">
+                                <span className="uppercase text-[#9A3412] dark:text-[#EA580C] font-semibold">
+                                  {item.kind === 'fragment' ? 'Fragment' : 'Catatan'}
+                                </span>
+                                <span className="text-[#9C9388]"> · {item.type}</span>
                               </span>
-                              <span className="text-[#9C9388]">· {item.type}</span>
+                              {isIncluded && (
+                                <span className="px-1.5 py-0.5 rounded bg-violet-100/70 dark:bg-violet-950/40 text-[#6D28D9] dark:text-[#A78BFA] text-[9px] shrink-0">
+                                  Sudah masuk
+                                </span>
+                              )}
                             </div>
                             <div className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] line-clamp-1 mt-0.5">
                               {item.title}
@@ -759,11 +1126,15 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <div>
                     <h3 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                      Kurasi Bahan Sintesis
+                      {baseSynthesisNote ? 'Kurasi Materi Tambahan' : 'Kurasi Bahan Sintesis'}
                     </h3>
                     <p className="text-xs text-[#6B635B] dark:text-[#A8A196]">
                       {selectedItems.length > 0
-                        ? `${selectedNotesCount} catatan & ${selectedFragmentsCount} fragments terpilih untuk disatukan.`
+                        ? baseSynthesisNote
+                          ? `${selectedNotesCount} catatan & ${selectedFragmentsCount} fragments baru dipilih untuk dilebur ke “${baseSynthesisNote.title || 'Dokumen Sintesis'}”.`
+                          : `${selectedNotesCount} catatan & ${selectedFragmentsCount} fragments terpilih untuk disatukan.`
+                        : baseSynthesisNote
+                        ? 'Centang minimal 1 catatan atau fragment baru di bawah ini.'
                         : 'Centang minimal 2 catatan atau fragments di bawah ini.'}
                     </p>
                   </div>
@@ -810,31 +1181,41 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
                   return (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                       {displayList.map((item) => {
-                        const isSelected = selectedIds.has(item.id);
+                        const isIncluded = Boolean(baseSynthesisNote && alreadyIncludedIds.has(item.id));
+                        const isSelected = !isIncluded && selectedIds.has(item.id);
                         return (
                           <div
                             key={item.id}
                             onClick={() => toggleItemSelection(item)}
-                            className={`p-3.5 rounded-xl border cursor-pointer transition-all flex items-start gap-3 ${
-                              isSelected
-                                ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#FAF7F2] dark:bg-[#272422] shadow-2xs'
-                                : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] hover:border-[#D6CEBE]'
+                            className={`p-3.5 rounded-xl border transition-all flex items-start gap-3 ${
+                              isIncluded
+                                ? 'border-[#E8E2D8]/70 dark:border-[#2F2B28]/70 bg-[#F5EFEB]/50 dark:bg-[#151413]/50 opacity-65 cursor-not-allowed'
+                                : isSelected
+                                ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#FAF7F2] dark:bg-[#272422] shadow-2xs cursor-pointer'
+                                : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] hover:border-[#D6CEBE] cursor-pointer'
                             }`}
                           >
                             <div
                               className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 mt-1 transition-colors ${
-                                isSelected
+                                isIncluded
+                                  ? 'bg-[#6D28D9]/20 dark:bg-[#A78BFA]/20 border-[#6D28D9]/40 text-[#6D28D9] dark:text-[#A78BFA]'
+                                  : isSelected
                                   ? 'bg-[#9A3412] dark:bg-[#EA580C] border-[#9A3412] dark:border-[#EA580C] text-white'
                                   : 'border-[#D6CEBE] dark:border-[#443E3A]'
                               }`}
                             >
-                              {isSelected && <Check size={11} />}
+                              {(isSelected || isIncluded) && <Check size={11} />}
                             </div>
                             <div className="min-w-0 flex-1">
                               <div className="flex items-center justify-between gap-2 text-[10px] font-mono">
                                 <span className="uppercase font-semibold text-[#9A3412] dark:text-[#EA580C]">
                                   {item.kind === 'fragment' ? 'Fragment' : 'Catatan'} · {item.type}
                                 </span>
+                                {isIncluded && (
+                                  <span className="px-1.5 py-0.5 rounded bg-violet-100/70 dark:bg-violet-950/40 text-[#6D28D9] dark:text-[#A78BFA] text-[9px] shrink-0">
+                                    Sudah masuk
+                                  </span>
+                                )}
                               </div>
                               <h4 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] line-clamp-1 mt-0.5">
                                 {item.title}
@@ -896,25 +1277,33 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
 
                     <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-1">
                       <span className="text-xs text-[#6B635B] dark:text-[#A8A196]">
-                        {selectedItems.length < 2
-                          ? 'Pilih minimal 2 bahan agar bisa disintesis.'
+                        {selectedItems.length < minRequiredItems
+                          ? baseSynthesisNote
+                            ? 'Pilih minimal 1 materi baru untuk memperbarui sintesis.'
+                            : 'Pilih minimal 2 bahan agar bisa disintesis.'
+                          : baseSynthesisNote
+                          ? `${existingResolvedSources.length} sumber lama + ${selectedItems.length} materi baru → 1 dokumen terpadu.`
                           : `${selectedItems.length} bahan siap digabungkan menjadi 1 dokumen baru.`}
                       </span>
                       <button
                         type="button"
                         onClick={handleRunSynthesis}
-                        disabled={selectedItems.length < 2 || isSynthesizing}
+                        disabled={selectedItems.length < minRequiredItems || isSynthesizing}
                         className="px-5 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-50 transition-colors flex items-center justify-center gap-2 shadow-xs"
                       >
                         {isSynthesizing ? (
                           <>
                             <Loader2 size={14} className="animate-spin" />
-                            <span>Menyusun Dokumen...</span>
+                            <span>
+                              {baseSynthesisNote ? 'Memperbarui Dokumen...' : 'Menyusun Dokumen...'}
+                            </span>
                           </>
                         ) : (
                           <>
                             <Sparkles size={14} />
-                            <span>Susun Dokumen Utuh</span>
+                            <span>
+                              {baseSynthesisNote ? 'Perbarui Dokumen Sintesis' : 'Susun Dokumen Utuh'}
+                            </span>
                             <ArrowRight size={13} />
                           </>
                         )}
@@ -933,10 +1322,14 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
                 <FileText size={18} />
               </div>
               <h3 className="font-serif text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Gabungkan Catatan Tercecer Jadi Satu Pengetahuan Matang
+                {baseSynthesisNote
+                  ? 'Siap Memperbarui Dokumen Sintesis Ini'
+                  : 'Gabungkan Catatan Tercecer Jadi Satu Pengetahuan Matang'}
               </h3>
               <p className="text-xs text-[#6B635B] dark:text-[#A8A196] max-w-lg mx-auto leading-relaxed">
-                Ketik topik di atas atau pilih manual dari arsipmu. Noesis akan mencari keterkaitan antar catatan & fragments lalu menyusunnya menjadi dokumen baru di Library tanpa menghapus catatan aslinya.
+                {baseSynthesisNote
+                  ? 'Cari lewat topik atau klik “Pilih Bahan Manual” di atas untuk memilih catatan & fragment baru yang ingin dilebur ke dalam dokumen sintesis induk tanpa kehilangan struktur sebelumnya.'
+                  : 'Ketik topik di atas atau pilih manual dari arsipmu. Noesis akan mencari keterkaitan antar catatan & fragments lalu menyusunnya menjadi dokumen baru di Library tanpa menghapus catatan aslinya.'}
               </p>
             </div>
           )}

@@ -1,10 +1,6 @@
 import React, { useState } from 'react';
 import { useNoesis } from '../context/NoesisContext';
-import {
-  getSupabaseUrl,
-  getSupabaseAnonKey,
-  isSupabaseConfigured,
-} from '../lib/supabase';
+import { isSupabaseConfigured } from '../lib/supabase';
 import {
   Sun,
   Moon,
@@ -16,9 +12,6 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
-  Database,
-  ChevronDown,
-  ChevronUp,
   LogIn,
   UserPlus,
 } from 'lucide-react';
@@ -56,7 +49,6 @@ export const AuthScreen: React.FC = () => {
     signIn,
     signUp,
     enterOfflineMode,
-    refreshSupabaseConfig,
   } = useNoesis();
 
   const [mode, setMode] = useState<'login' | 'signup'>('login');
@@ -69,19 +61,16 @@ export const AuthScreen: React.FC = () => {
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
 
   const configured = isSupabaseConfigured();
-  const [showServerConfig, setShowServerConfig] = useState(!configured);
-  const [sbUrl, setSbUrl] = useState(getSupabaseUrl());
-  const [sbKey, setSbKey] = useState(getSupabaseAnonKey());
-  const [serverSavedMsg, setServerSavedMsg] = useState<string | null>(null);
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
     setSuccessMsg(null);
 
-    if (!isSupabaseConfigured()) {
-      setShowServerConfig(true);
-      setErrorMsg('Masukkan Project URL & Anon Key Supabase terlebih dahulu.');
+    if (!configured) {
+      setErrorMsg(
+        'Server Supabase belum terkonfigurasi di environment variables (VITE_SUPABASE_URL & VITE_SUPABASE_ANON_KEY).'
+      );
       return;
     }
 
@@ -121,30 +110,6 @@ export const AuthScreen: React.FC = () => {
       }
     }
     setIsSubmitting(false);
-  };
-
-  const handleSaveServerConfig = (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMsg(null);
-    setServerSavedMsg(null);
-
-    const trimmedUrl = sbUrl.trim();
-    const trimmedKey = sbKey.trim();
-
-    if (trimmedUrl) localStorage.setItem('noesis_supabase_url', trimmedUrl);
-    else localStorage.removeItem('noesis_supabase_url');
-
-    if (trimmedKey) localStorage.setItem('noesis_supabase_anon_key', trimmedKey);
-    else localStorage.removeItem('noesis_supabase_anon_key');
-
-    refreshSupabaseConfig();
-
-    if (trimmedUrl && trimmedKey) {
-      setServerSavedMsg('Konfigurasi Supabase disimpan. Silakan masuk dengan akun Anda.');
-      setShowServerConfig(false);
-    } else {
-      setServerSavedMsg('Konfigurasi Supabase dibersihkan.');
-    }
   };
 
   return (
@@ -245,10 +210,9 @@ export const AuthScreen: React.FC = () => {
             </div>
           )}
 
-          {serverSavedMsg && !errorMsg && (
-            <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2 leading-relaxed">
-              <CheckCircle2 size={15} className="shrink-0 mt-0.5" />
-              <span>{serverSavedMsg}</span>
+          {!configured && !errorMsg && (
+            <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 text-xs text-amber-800 dark:text-amber-300 leading-relaxed">
+              Server Supabase belum disetel di environment variables (<code className="font-mono">VITE_SUPABASE_URL</code> &amp; <code className="font-mono">VITE_SUPABASE_ANON_KEY</code>). Anda tetap dapat menggunakan Mode Lokal di bawah.
             </div>
           )}
 
@@ -342,59 +306,8 @@ export const AuthScreen: React.FC = () => {
             </button>
           </form>
 
-          {/* Multi-device Supabase Server Credentials Accordion */}
-          <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-3">
-            <button
-              type="button"
-              onClick={() => setShowServerConfig((prev) => !prev)}
-              className="w-full flex items-center justify-between text-xs text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors"
-            >
-              <span className="flex items-center gap-1.5">
-                <Database size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                <span>
-                  {configured
-                    ? 'Konfigurasi Server Supabase'
-                    : 'Hubungkan Server Supabase (Wajib untuk Sync)'}
-                </span>
-              </span>
-              {showServerConfig ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-            </button>
-
-            {showServerConfig && (
-              <form onSubmit={handleSaveServerConfig} className="space-y-3 pt-1">
-                <div>
-                  <label className="block text-[10px] font-mono text-[#9C9388] mb-1">
-                    Project URL
-                  </label>
-                  <input
-                    type="url"
-                    value={sbUrl}
-                    onChange={(e) => setSbUrl(e.target.value)}
-                    placeholder="https://xyz.supabase.co"
-                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[10px] font-mono text-[#9C9388] mb-1">
-                    Anon / Public Key
-                  </label>
-                  <input
-                    type="password"
-                    value={sbKey}
-                    onChange={(e) => setSbKey(e.target.value)}
-                    placeholder="eyJhbGciOi..."
-                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-                  />
-                </div>
-                <button
-                  type="submit"
-                  className="w-full py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#272422] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:border-[#9A3412] transition-colors"
-                >
-                  Simpan Koneksi Supabase
-                </button>
-              </form>
-            )}
-
+          {/* Offline / Local Mode Entry */}
+          <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28]">
             <button
               type="button"
               onClick={enterOfflineMode}

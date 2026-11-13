@@ -14,6 +14,8 @@ import { SettingsPage } from './pages/SettingsPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthScreen } from './components/AuthScreen';
+import { SafetyConfirmModal } from './components/SafetyConfirmModal';
+import { useVirtualKeyboardOpen } from './hooks/useVirtualKeyboardOpen';
 import { Menu, Sun, Moon, Monitor, Settings as SettingsIcon, Loader2, CheckCircle2 } from 'lucide-react';
 
 const WorkspaceShell: React.FC = () => {
@@ -29,6 +31,7 @@ const WorkspaceShell: React.FC = () => {
     offlineBypass,
     autoSyncNotice,
   } = useNoesis();
+  const isKeyboardOpen = useVirtualKeyboardOpen();
 
   const cycleTheme = () => {
     if (theme === 'light') setTheme('dark');
@@ -73,7 +76,11 @@ const WorkspaceShell: React.FC = () => {
       )}
 
       {/* Main Workspace Frame */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden relative pb-16 md:pb-0">
+      <div
+        className={`flex-1 flex flex-col h-full overflow-hidden relative ${
+          isKeyboardOpen ? 'pb-0' : 'pb-16 md:pb-0'
+        }`}
+      >
         {/* Mobile Top Header */}
         <header className="md:hidden flex items-center justify-between px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/95 dark:bg-[#151413]/95 backdrop-blur-sm z-30 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -168,6 +175,8 @@ const WorkspaceShell: React.FC = () => {
             <span>{autoSyncNotice}</span>
           </div>
         )}
+        {/* Safety Confirmation Modal (Offline Logout / Wipe Local / Reset) */}
+        <SafetyConfirmModal />
       </div>
     </div>
   );
