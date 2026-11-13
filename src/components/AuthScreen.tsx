@@ -8,6 +8,7 @@ import {
 import {
   Sun,
   Moon,
+  Monitor,
   Mail,
   Lock,
   Eye,
@@ -161,16 +162,23 @@ export const AuthScreen: React.FC = () => {
 
         <button
           type="button"
-          onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-          className="p-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors"
-          aria-label="Toggle theme"
-          title="Ganti Tema"
+          onClick={() => {
+            if (theme === 'light') setTheme('dark');
+            else if (theme === 'dark') setTheme('system');
+            else setTheme('light');
+          }}
+          className="flex items-center gap-1.5 px-2.5 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors text-xs font-medium whitespace-nowrap"
+          aria-label={`Toggle theme (current: ${theme})`}
+          title={`Tema: ${theme === 'system' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}`}
         >
           {theme === 'dark' ? (
-            <Sun size={16} className="text-[#EA580C]" />
+            <Moon size={15} className="text-[#EA580C]" />
+          ) : theme === 'system' ? (
+            <Monitor size={15} className="text-[#9A3412] dark:text-[#EA580C]" />
           ) : (
-            <Moon size={16} className="text-[#9A3412]" />
+            <Sun size={15} className="text-[#9A3412]" />
           )}
+          <span>{theme === 'system' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}</span>
         </button>
       </div>
 

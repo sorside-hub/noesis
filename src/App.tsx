@@ -14,7 +14,7 @@ import { SettingsPage } from './pages/SettingsPage';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthScreen } from './components/AuthScreen';
-import { Menu, Sun, Moon, Settings as SettingsIcon, Loader2 } from 'lucide-react';
+import { Menu, Sun, Moon, Monitor, Settings as SettingsIcon, Loader2, CheckCircle2 } from 'lucide-react';
 
 const WorkspaceShell: React.FC = () => {
   const {
@@ -27,7 +27,14 @@ const WorkspaceShell: React.FC = () => {
     authUser,
     authLoading,
     offlineBypass,
+    autoSyncNotice,
   } = useNoesis();
+
+  const cycleTheme = () => {
+    if (theme === 'light') setTheme('dark');
+    else if (theme === 'dark') setTheme('system');
+    else setTheme('light');
+  };
 
   if (authLoading) {
     return (
@@ -87,12 +94,19 @@ const WorkspaceShell: React.FC = () => {
 
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="p-1.5 rounded-lg text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors"
-              aria-label="Toggle theme"
-              title="Toggle Theme"
+              onClick={cycleTheme}
+              className="flex items-center gap-1 px-2 py-1.5 rounded-lg text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors text-[11px] font-medium whitespace-nowrap"
+              aria-label={`Toggle theme (current: ${theme})`}
+              title={`Tema: ${theme === 'system' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'} (Ketuk untuk ganti)`}
             >
-              {theme === 'dark' ? <Sun size={18} className="text-[#EA580C]" /> : <Moon size={18} className="text-[#9A3412]" />}
+              {theme === 'dark' ? (
+                <Moon size={16} className="text-[#EA580C]" />
+              ) : theme === 'system' ? (
+                <Monitor size={16} className="text-[#9A3412] dark:text-[#EA580C]" />
+              ) : (
+                <Sun size={16} className="text-[#9A3412]" />
+              )}
+              <span>{theme === 'system' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}</span>
             </button>
             <button
               onClick={() => setActiveView('settings')}
@@ -146,6 +160,14 @@ const WorkspaceShell: React.FC = () => {
 
         {/* Offline Connectivity Indicator */}
         <OfflineIndicator />
+
+        {/* Auto-sync Toast after offline-to-login push */}
+        {autoSyncNotice && (
+          <div className="fixed bottom-20 md:bottom-4 right-4 z-50 flex items-center gap-2 rounded-xl bg-[#221F1D] dark:bg-[#EDE8E1] px-3.5 py-2.5 text-xs text-white dark:text-[#151413] shadow-xl animate-in slide-in-from-bottom duration-200 max-w-xs sm:max-w-sm">
+            <CheckCircle2 size={15} className="text-emerald-400 dark:text-emerald-600 shrink-0" />
+            <span>{autoSyncNotice}</span>
+          </div>
+        )}
       </div>
     </div>
   );

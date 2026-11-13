@@ -131,6 +131,7 @@ interface NoesisContextType {
   isSupabaseConnected: boolean;
   isCloudflareConnected: boolean;
   syncStatus: 'synced' | 'syncing' | 'offline' | 'error';
+  autoSyncNotice: string | null;
   syncAllToSupabase: () => Promise<{ success: boolean; notesCount: number; fragmentsCount: number }>;
   manualEmbedNote: (noteId: string) => Promise<boolean>;
   manualRemoveEmbedNote: (noteId: string) => Promise<boolean>;
@@ -302,10 +303,27 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isSupabaseConnected, setIsSupabaseConnected] = useState<boolean>(isSupabaseConfigured());
   const [isCloudflareConnected, setIsCloudflareConnected] = useState<boolean>(isCloudflareAiConfigured());
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
+  const [autoSyncNotice, setAutoSyncNotice] = useState<string | null>(null);
 
   // Debounce refs for auto-embedding notes and already-embedded fragments
   const embedTimersRef = useRef<{ [noteId: string]: NodeJS.Timeout }>({});
   const fragEmbedTimersRef = useRef<{ [fragmentId: string]: NodeJS.Timeout }>({});
+
+  // Latest-state refs for safe async sync & logout cleanup
+  const authUserRef = useRef<User | null>(authUser);
+  authUserRef.current = authUser;
+  const notesRef = useRef<Note[]>(notes);
+  notesRef.current = notes;
+  const fragmentsRef = useRef<Fragment[]>(fragments);
+  fragmentsRef.current = fragments;
+
+  const canRemoteSync = () => isSupabaseConfigured() && Boolean(authUserRef.current);
+
+  const markOfflineDirtyIfLoggedOut = () => {
+    if (!authUserRef.current) {
+      localStorage.setItem('noesis_offline_dirty', 'true');
+    }
+  };
 
   const refreshSupabaseConfig = () => {
     resetSupabaseClientCache();
@@ -320,21 +338,54 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     localStorage.setItem('noesis_offline_bypass', 'true');
   };
 
-  const clearLocalWorkspaceData = () => {
-    localStorage.removeItem('noesis_notes');
-    localStorage.removeItem('noesis_fragments');
-    localStorage.removeItem('noesis_relics');
-    localStorage.removeItem('noesis_dismissed_connections');
-    localStorage.removeItem('noesis_approved_connections');
-    localStorage.removeItem('noesis_discover_analyses');
-    localStorage.removeItem('noesis_discover_cluster_summaries');
-    localStorage.removeItem('noesis_auth_uid');
+  const clearLocalWorkspaceData = (wipeAuthTokens = false) => {
+    Object.values(embedTimersRef.current).forEach((t) => clearTimeout(t));
+    embedTimersRef.current = {};
+    Object.values(fragEmbedTimersRef.current).forEach((t) => clearTimeout(t));
+    fragEmbedTimersRef.current = {};
+
+    const keysToRemove = [
+      'noesis_notes',
+      'noesis_fragments',
+      'noesis_relics',
+      'noesis_projects',
+      'noesis_dismissed_connections',
+      'noesis_approved_connections',
+      'noesis_discover_analyses',
+      'noesis_discover_cluster_summaries',
+      'noesis_auth_uid',
+      'noesis_offline_dirty',
+      'noesis_offline_bypass',
+    ];
+    keysToRemove.forEach((k) => localStorage.removeItem(k));
+
+    if (wipeAuthTokens) {
+      try {
+        for (let i = localStorage.length - 1; i >= 0; i--) {
+          const key = localStorage.key(i);
+          if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+            localStorage.removeItem(key);
+          }
+        }
+        sessionStorage.clear();
+      } catch {
+        // Ignore storage access errors
+      }
+    }
+
     setNotes([]);
     setFragments([]);
+    setProjects([]);
     setApprovedConnections([]);
     setDismissedConnections([]);
     setConnectionAnalyses({});
     setActiveNoteId('');
+    setActiveFragmentId(null);
+    setIsFragmentDrawerOpen(false);
+    setIsQuickCaptureOpen(false);
+    setSearchQuery('');
+    setSelectedTag(null);
+    setActiveView('editor');
   };
 
   const signIn = async (
@@ -369,10 +420,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const signOut = async () => {
     await signOutFromSupabase();
-    clearLocalWorkspaceData();
+    clearLocalWorkspaceData(true);
     setAuthUser(null);
     setOfflineBypass(false);
-    localStorage.removeItem('noesis_offline_bypass');
+    setAutoSyncNotice(null);
   };
 
   const updatePassword = async (
@@ -385,19 +436,32 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return { ok: true };
   };
 
-  // Sync entities to localStorage on state changes
+  // Sync entities to localStorage on state changes (keep storage clean when logged out & empty)
   useEffect(() => {
-    localStorage.setItem('noesis_notes', JSON.stringify(notes));
-  }, [notes]);
+    if (!authUser && !offlineBypass && notes.length === 0) {
+      localStorage.removeItem('noesis_notes');
+    } else {
+      localStorage.setItem('noesis_notes', JSON.stringify(notes));
+    }
+  }, [notes, authUser, offlineBypass]);
 
   useEffect(() => {
-    localStorage.setItem('noesis_fragments', JSON.stringify(fragments));
-    localStorage.setItem('noesis_relics', JSON.stringify(fragments));
-  }, [fragments]);
+    if (!authUser && !offlineBypass && fragments.length === 0) {
+      localStorage.removeItem('noesis_fragments');
+      localStorage.removeItem('noesis_relics');
+    } else {
+      localStorage.setItem('noesis_fragments', JSON.stringify(fragments));
+      localStorage.setItem('noesis_relics', JSON.stringify(fragments));
+    }
+  }, [fragments, authUser, offlineBypass]);
 
   useEffect(() => {
-    localStorage.setItem('noesis_projects', JSON.stringify(projects));
-  }, [projects]);
+    if (!authUser && !offlineBypass && projects.length === 0) {
+      localStorage.removeItem('noesis_projects');
+    } else {
+      localStorage.setItem('noesis_projects', JSON.stringify(projects));
+    }
+  }, [projects, authUser, offlineBypass]);
 
   // Listen to Supabase Auth Session changes
   useEffect(() => {
@@ -437,7 +501,24 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     let isMounted = true;
     const savedUid = localStorage.getItem('noesis_auth_uid');
     const isDifferentUser = savedUid !== null && savedUid !== authUser.id;
-    if (isDifferentUser) {
+    const hasOfflineDirtyFlag = localStorage.getItem('noesis_offline_dirty') === 'true';
+
+    // Snapshot any offline drafts before potential state transitions
+    const offlineNotesSnapshot = notesRef.current;
+    const offlineFragmentsSnapshot = fragmentsRef.current;
+    const offlineApprovedSnapshot = approvedRef.current;
+    const offlineDismissedSnapshot = dismissedRef.current;
+    const offlineAnalysesSnapshot = analysesRef.current;
+
+    const hasOfflineDrafts =
+      (hasOfflineDirtyFlag || !savedUid) &&
+      (offlineNotesSnapshot.length > 0 ||
+        offlineFragmentsSnapshot.length > 0 ||
+        offlineApprovedSnapshot.length > 0 ||
+        offlineDismissedSnapshot.length > 0 ||
+        Object.keys(offlineAnalysesSnapshot).length > 0);
+
+    if (isDifferentUser && !hasOfflineDirtyFlag) {
       clearLocalWorkspaceData();
     }
     localStorage.setItem('noesis_auth_uid', authUser.id);
@@ -461,8 +542,78 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
     };
 
+    const pushOfflineDataBeforePull = async () => {
+      if (!hasOfflineDrafts) return;
+      setSyncStatus('syncing');
+      let pushedNotes = 0;
+      let pushedFragments = 0;
+
+      for (const note of offlineNotesSnapshot) {
+        const synced = isCloudflareAiConfigured()
+          ? (await embedAndSyncNote(note)) || (await upsertNoteToSupabase(note))
+          : await upsertNoteToSupabase(note);
+        if (synced) pushedNotes++;
+      }
+
+      for (const frag of offlineFragmentsSnapshot) {
+        const synced =
+          frag.embeddedAt && isCloudflareAiConfigured()
+            ? (await embedAndSyncFragment(frag)) || (await upsertFragmentToSupabase(frag))
+            : await upsertFragmentToSupabase(frag);
+        if (synced) pushedFragments++;
+      }
+
+      // Push offline Discover connections & AI analyses
+      const itemMap = new Map<string, DiscoverSourceItem>();
+      offlineNotesSnapshot.forEach((n) => itemMap.set(n.id, noteToDiscoverItem(n)));
+      offlineFragmentsSnapshot.forEach((f) => itemMap.set(f.id, fragmentToDiscoverItem(f)));
+
+      const allPairKeys = new Set<string>([
+        ...offlineApprovedSnapshot,
+        ...offlineDismissedSnapshot,
+        ...Object.keys(offlineAnalysesSnapshot),
+      ]);
+
+      for (const pairKey of allPairKeys) {
+        const [idA, idB] = pairKey.split('::');
+        const itemA = itemMap.get(idA);
+        const itemB = itemMap.get(idB);
+        if (!itemA || !itemB) continue;
+        const first = itemA.id < itemB.id ? itemA : itemB;
+        const second = itemA.id < itemB.id ? itemB : itemA;
+        const status = offlineApprovedSnapshot.includes(pairKey)
+          ? 'approved'
+          : offlineDismissedSnapshot.includes(pairKey)
+          ? 'dismissed'
+          : 'pending';
+
+        await upsertDiscoverConnectionToSupabase({
+          pairKey,
+          itemAId: first.id,
+          itemAKind: first.kind,
+          itemBId: second.id,
+          itemBKind: second.kind,
+          status,
+          analysis: offlineAnalysesSnapshot[pairKey],
+          updatedAt: new Date().toISOString(),
+        });
+      }
+
+      localStorage.removeItem('noesis_offline_dirty');
+      if (isMounted && (pushedNotes > 0 || pushedFragments > 0)) {
+        setAutoSyncNotice(
+          `Data offline otomatis tersinkronisasi (${pushedNotes} catatan, ${pushedFragments} fragments).`
+        );
+        setTimeout(() => {
+          setAutoSyncNotice(null);
+        }, 4500);
+      }
+    };
+
     const initSupabaseSync = async () => {
       try {
+        await pushOfflineDataBeforePull();
+
         const [dbNotes, dbFragments, dbDiscoverConns] = await Promise.all([
           fetchNotesFromSupabase(),
           fetchFragmentsFromSupabase(),
@@ -481,9 +632,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
 
         if (dbDiscoverConns !== null && isMounted) {
-          applyDbDiscoverConnections(dbDiscoverConns, !isDifferentUser && savedUid === authUser.id);
+          applyDbDiscoverConnections(
+            dbDiscoverConns,
+            !hasOfflineDrafts && !isDifferentUser && savedUid === authUser.id
+          );
         }
 
+        setSyncStatus('synced');
         setIsSupabaseConnected(true);
       } catch (err) {
         console.warn('Initial Supabase sync failed, using offline cache:', err);
@@ -546,8 +701,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setActiveNoteId(newNote.id);
     setActiveView('editor');
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       upsertNoteToSupabase(newNote).catch(console.warn);
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
 
     return newNote.id;
@@ -568,30 +725,33 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       })
     );
 
-    if (isSupabaseConfigured() && updatedObj) {
+    if (canRemoteSync() && updatedObj) {
       if (embedTimersRef.current[id]) {
         clearTimeout(embedTimersRef.current[id]);
       }
       embedTimersRef.current[id] = setTimeout(() => {
-        if (updatedObj) {
+        if (updatedObj && canRemoteSync()) {
           embedAndSyncNote(updatedObj).catch(console.warn);
         }
       }, 1500);
+    } else if (updatedObj) {
+      markOfflineDirtyIfLoggedOut();
     }
   };
 
   const linkRelatedNote = (noteId: string, targetNoteId: string) => {
     if (noteId === targetNoteId) return;
+    markOfflineDirtyIfLoggedOut();
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === noteId && !n.relatedNoteIds.includes(targetNoteId)) {
           const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, targetNoteId] };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
           return updated;
         }
         if (n.id === targetNoteId && !n.relatedNoteIds.includes(noteId)) {
           const updated = { ...n, relatedNoteIds: [...n.relatedNoteIds, noteId] };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
           return updated;
         }
         return n;
@@ -600,16 +760,17 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const unlinkRelatedNote = (noteId: string, targetNoteId: string) => {
+    markOfflineDirtyIfLoggedOut();
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === noteId) {
           const updated = { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== targetNoteId) };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
           return updated;
         }
         if (n.id === targetNoteId) {
           const updated = { ...n, relatedNoteIds: n.relatedNoteIds.filter((id) => id !== noteId) };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
           return updated;
         }
         return n;
@@ -633,7 +794,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setActiveNoteId(remaining[0].id);
       }
 
-      if (isSupabaseConfigured()) {
+      if (canRemoteSync()) {
         deleteNoteFromSupabase(id).catch(console.warn);
       }
       return true;
@@ -648,17 +809,18 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setActiveNoteId(remaining[0].id);
     }
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       deleteNoteFromSupabase(id).catch(console.warn);
     }
   };
 
   const toggleFavoriteNote = (id: string) => {
+    markOfflineDirtyIfLoggedOut();
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === id) {
           const updated = { ...n, favorite: !n.favorite };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
           return updated;
         }
         return n;
@@ -667,11 +829,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const toggleArchiveNote = (id: string) => {
+    markOfflineDirtyIfLoggedOut();
     setNotes((prev) =>
       prev.map((n) => {
         if (n.id === id) {
           const updated = { ...n, archived: !n.archived };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(updated).catch(console.warn);
           return updated;
         }
         return n;
@@ -713,8 +876,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
     setFragments((prev) => [newFragment, ...prev]);
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       upsertFragmentToSupabase(newFragment).catch(console.warn);
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
 
     return id;
@@ -734,7 +899,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       })
     );
 
-    if (isSupabaseConfigured() && updatedFragObj) {
+    if (canRemoteSync() && updatedFragObj) {
       // Preserve existing vector embedding unless user explicitly removes it
       upsertFragmentToSupabase(updatedFragObj).catch(console.warn);
 
@@ -745,6 +910,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           clearTimeout(fragEmbedTimersRef.current[id]);
         }
         fragEmbedTimersRef.current[id] = setTimeout(async () => {
+          if (!canRemoteSync()) return;
           const ok = await embedAndSyncFragment(snapshot);
           if (ok) {
             const nowIso = new Date().toISOString();
@@ -754,6 +920,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           }
         }, 1500);
       }
+    } else if (updatedFragObj) {
+      markOfflineDirtyIfLoggedOut();
     }
   };
 
@@ -762,17 +930,18 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (activeFragmentId === id) {
       closeFragmentDrawer();
     }
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       deleteFragmentFromSupabase(id).catch(console.warn);
     }
   };
 
   const toggleStarFragment = (id: string) => {
+    markOfflineDirtyIfLoggedOut();
     setFragments((prev) =>
       prev.map((f) => {
         if (f.id === id) {
           const updated = { ...f, starred: !f.starred };
-          if (isSupabaseConfigured()) upsertFragmentToSupabase(updated).catch(console.warn);
+          if (canRemoteSync()) upsertFragmentToSupabase(updated).catch(console.warn);
           return updated;
         }
         return f;
@@ -971,17 +1140,36 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   });
 
-  useEffect(() => {
-    localStorage.setItem('noesis_dismissed_connections', JSON.stringify(dismissedConnections));
-  }, [dismissedConnections]);
+  const approvedRef = useRef<string[]>(approvedConnections);
+  approvedRef.current = approvedConnections;
+  const dismissedRef = useRef<string[]>(dismissedConnections);
+  dismissedRef.current = dismissedConnections;
+  const analysesRef = useRef<Record<string, ConnectionAnalysis>>(connectionAnalyses);
+  analysesRef.current = connectionAnalyses;
 
   useEffect(() => {
-    localStorage.setItem('noesis_approved_connections', JSON.stringify(approvedConnections));
-  }, [approvedConnections]);
+    if (!authUser && !offlineBypass && dismissedConnections.length === 0) {
+      localStorage.removeItem('noesis_dismissed_connections');
+    } else {
+      localStorage.setItem('noesis_dismissed_connections', JSON.stringify(dismissedConnections));
+    }
+  }, [dismissedConnections, authUser, offlineBypass]);
 
   useEffect(() => {
-    localStorage.setItem('noesis_discover_analyses', JSON.stringify(connectionAnalyses));
-  }, [connectionAnalyses]);
+    if (!authUser && !offlineBypass && approvedConnections.length === 0) {
+      localStorage.removeItem('noesis_approved_connections');
+    } else {
+      localStorage.setItem('noesis_approved_connections', JSON.stringify(approvedConnections));
+    }
+  }, [approvedConnections, authUser, offlineBypass]);
+
+  useEffect(() => {
+    if (!authUser && !offlineBypass && Object.keys(connectionAnalyses).length === 0) {
+      localStorage.removeItem('noesis_discover_analyses');
+    } else {
+      localStorage.setItem('noesis_discover_analyses', JSON.stringify(connectionAnalyses));
+    }
+  }, [connectionAnalyses, authUser, offlineBypass]);
 
   const buildCanonicalPair = (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => {
     const first = itemA.id < itemB.id ? itemA : itemB;
@@ -998,7 +1186,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setDismissedConnections((prev) => (prev.includes(pairKey) ? prev : [...prev, pairKey]));
     setApprovedConnections((prev) => prev.filter((k) => k !== pairKey));
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       upsertDiscoverConnectionToSupabase({
         pairKey,
         itemAId: first.id,
@@ -1009,12 +1197,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         analysis: connectionAnalyses[pairKey],
         updatedAt: new Date().toISOString(),
       }).catch(console.warn);
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
   };
 
   const resetDismissedConnections = () => {
     setDismissedConnections([]);
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       restoreDismissedDiscoverConnectionsInSupabase().catch(console.warn);
     }
   };
@@ -1028,7 +1218,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       linkRelatedNote(itemA.id, itemB.id);
     }
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       upsertDiscoverConnectionToSupabase({
         pairKey,
         itemAId: first.id,
@@ -1039,6 +1229,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         analysis: connectionAnalyses[pairKey],
         updatedAt: new Date().toISOString(),
       }).catch(console.warn);
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
   };
 
@@ -1053,7 +1245,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       [pairKey]: analysis,
     }));
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       const currentStatus = approvedConnections.includes(pairKey)
         ? 'approved'
         : dismissedConnections.includes(pairKey)
@@ -1070,14 +1262,18 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         analysis,
         updatedAt: new Date().toISOString(),
       }).catch(console.warn);
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
   };
 
   const unlinkDiscoverConnection = (idA: string, idB: string) => {
     const pairKey = makePairKey(idA, idB);
     setApprovedConnections((prev) => prev.filter((k) => k !== pairKey));
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       unlinkDiscoverConnectionInSupabase(pairKey).catch(console.warn);
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
   };
 
@@ -1131,8 +1327,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     let copiedEmbedding: number[] | undefined;
     let resolvedEmbeddedAt: string | undefined;
 
-    // 3. Commit-First in Supabase (if configured) before touching local state or deleting old Fragment
-    if (isSupabaseConfigured()) {
+    // 3. Commit-First in Supabase (if authenticated & configured) before touching local state or deleting old Fragment
+    if (canRemoteSync()) {
       if (frag.embeddedAt) {
         const embedRes = await fetchFragmentEmbeddingById(frag.id);
         if (!embedRes.ok) {
@@ -1179,7 +1375,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       };
     });
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       // Cancel any pending auto-embed timer on the fragment so it won't race
       if (fragEmbedTimersRef.current[frag.id]) {
         clearTimeout(fragEmbedTimersRef.current[frag.id]);
@@ -1252,6 +1448,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             'Note & seluruh relasi berhasil disalin ke Library, namun gagal menghapus Fragment lama dari Supabase.',
         };
       }
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
 
     // 4. All remote steps succeeded (or running offline): update React state atomically
@@ -1422,7 +1620,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       const updatedExisting = prev.map((n) => {
         if (noteIds.includes(n.id) && !n.relatedNoteIds.includes(newId)) {
           const linked = { ...n, relatedNoteIds: [...n.relatedNoteIds, newId] };
-          if (isSupabaseConfigured()) upsertNoteToSupabase(linked).catch(console.warn);
+          if (canRemoteSync()) upsertNoteToSupabase(linked).catch(console.warn);
           return linked;
         }
         return n;
@@ -1430,10 +1628,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return [newNote, ...updatedExisting];
     });
 
-    if (isSupabaseConfigured()) {
+    if (canRemoteSync()) {
       embedAndSyncNote(newNote).catch(() => {
         upsertNoteToSupabase(newNote).catch(console.warn);
       });
+    } else {
+      markOfflineDirtyIfLoggedOut();
     }
 
     return newId;
@@ -1500,6 +1700,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         isSupabaseConnected,
         isCloudflareConnected,
         syncStatus,
+        autoSyncNotice,
         syncAllToSupabase,
         manualEmbedNote,
         manualRemoveEmbedNote,

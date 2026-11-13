@@ -733,12 +733,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
         )}
 
         {/* Prose Editor Scrollable Area - Ultra Clean Canvas without Bottom Bar */}
-        <div className="flex-1 overflow-y-auto px-6 sm:px-12 md:px-16 lg:px-24 py-8 max-w-4xl mx-auto w-full">
-          {/* Format Tanggal Sesuai Permintaan Pengguna: Created: 09/11/2026 • Updated: 09/11/2026 */}
-          <p className="text-xs font-mono text-[#9C9388] dark:text-[#736C62] mb-3 select-none truncate">
-            Created: {formatDate(activeNote.createdAt)} • Updated: {formatDate(activeNote.updatedAt)}
-          </p>
-
+        <div className="flex-1 overflow-y-auto px-6 sm:px-12 md:px-16 lg:px-24 py-6 sm:py-8 max-w-4xl mx-auto w-full">
           {/* Title Input */}
           <div className="mb-4">
             <input
@@ -1092,6 +1087,13 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 </p>
               )}
             </div>
+
+            {/* 7. Timestamps (Created & Updated) */}
+            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+              <span>Created {formatDate(activeNote.createdAt)}</span>
+              <span>·</span>
+              <span>Updated {formatDate(activeNote.updatedAt)}</span>
+            </div>
           </div>
         </aside>
       )}
@@ -1395,6 +1397,13 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                   {embedNotice}
                 </p>
               )}
+            </div>
+
+            {/* 7. Timestamps (Created & Updated) */}
+            <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+              <span>Created {formatDate(activeNote.createdAt)}</span>
+              <span>·</span>
+              <span>Updated {formatDate(activeNote.updatedAt)}</span>
             </div>
 
             <button
