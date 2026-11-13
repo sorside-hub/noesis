@@ -30,7 +30,6 @@ export interface Note {
   relatedNoteIds: string[];
   createdAt: string;
   updatedAt: string;
-  wordCount: number;
   embeddedAt?: string;
 }
 
@@ -66,4 +65,88 @@ export interface Project {
   deadline: string;
   noteIds: string[];
   milestones: Milestone[];
+}
+
+// ============================================================================
+// DISCOVER & SYNTHESIS TYPES
+// ============================================================================
+
+export type DiscoverItemKind = 'note' | 'fragment';
+
+export interface DiscoverSourceItem {
+  id: string;
+  kind: DiscoverItemKind;
+  title: string;
+  type: NoteType | FragmentType;
+  content: string;
+  excerpt: string;
+  tags: string[];
+  source?: string;
+  date: string;
+  relatedNoteIds?: string[];
+  similarity?: number;
+}
+
+export type SynthesisStyle = 'structured' | 'essay' | 'brief';
+
+export interface SynthesisResult {
+  title: string;
+  summary: string;
+  htmlContent: string;
+  suggestedTags: string[];
+  synthesisNotes: string;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+}
+
+export type ConnectionRelationshipType =
+  | 'complementary'
+  | 'expanding'
+  | 'contrasting'
+  | 'foundational';
+
+export interface ConnectionAnalysis {
+  relationshipType: ConnectionRelationshipType;
+  similaritySummary: string;
+  connectionInsight: string;
+  synthesisPotential: string;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+}
+
+export interface ConnectionCandidate {
+  pairKey: string;
+  itemA: DiscoverSourceItem;
+  itemB: DiscoverSourceItem;
+  score: number;
+  basis: 'vector' | 'semantic-keyword';
+}
+
+export interface TopicClusterCandidate {
+  id: string;
+  anchorTitle: string;
+  items: DiscoverSourceItem[];
+  avgScore: number;
+  basis: 'vector' | 'semantic-keyword';
+}
+
+export interface TopicClusterSummary {
+  themeTitle: string;
+  themeDescription: string;
+  keyAngles: string[];
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+}
+
+export type DiscoverConnectionStatus = 'pending' | 'approved' | 'dismissed';
+
+export interface DiscoverConnectionRecord {
+  pairKey: string;
+  itemAId: string;
+  itemAKind: DiscoverItemKind;
+  itemBId: string;
+  itemBKind: DiscoverItemKind;
+  status: DiscoverConnectionStatus;
+  analysis?: ConnectionAnalysis;
+  updatedAt: string;
 }

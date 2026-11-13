@@ -254,8 +254,6 @@ export const StreamColumn: React.FC = () => {
                   <span className="uppercase text-[10px] text-[#9A3412] dark:text-[#EA580C] font-semibold">{note.type || 'thought'}</span>
                   <span aria-hidden="true">·</span>
                   <span>{formatCardDate(note.updatedAt || note.createdAt)}</span>
-                  <span aria-hidden="true">·</span>
-                  <span>{note.wordCount || 0} words</span>
                   {isSemanticSearch && searchQuery.trim() && semanticMatches.has(note.id) && (
                     <>
                       <span aria-hidden="true">·</span>

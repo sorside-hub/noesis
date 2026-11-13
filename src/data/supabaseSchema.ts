@@ -25,7 +25,6 @@ CREATE TABLE IF NOT EXISTS public.notes (
   favorite BOOLEAN DEFAULT false,
   archived BOOLEAN DEFAULT false,
   related_note_ids TEXT[] DEFAULT '{}',
-  word_count INTEGER DEFAULT 0,
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   embedding vector(1024),
@@ -47,15 +46,29 @@ CREATE TABLE IF NOT EXISTS public.fragments (
   embedded_at TIMESTAMPTZ
 );
 
--- 4. PASTIKAN KOLOM EMBEDDING TERSEDIA JIKA TABEL SUDAH ADA SEBELUMNYA
+-- 3B. TABEL DISCOVER CONNECTIONS (Sinkronisasi koneksi & analisis antar perangkat)
+CREATE TABLE IF NOT EXISTS public.discover_connections (
+  pair_key TEXT PRIMARY KEY,
+  item_a_id TEXT NOT NULL,
+  item_a_kind TEXT NOT NULL CHECK (item_a_kind IN ('note', 'fragment')),
+  item_b_id TEXT NOT NULL,
+  item_b_kind TEXT NOT NULL CHECK (item_b_kind IN ('note', 'fragment')),
+  status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'dismissed')),
+  analysis JSONB,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
+-- 4. PASTIKAN KOLOM EMBEDDING TERSEDIA & BERSIHKAN KOLOM TIDAK DIPAKAI
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+ALTER TABLE public.notes DROP COLUMN IF EXISTS word_count;
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
 
 -- 5. AMANKAN DENGAN ROW LEVEL SECURITY (RLS)
 ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fragments ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.discover_connections ENABLE ROW LEVEL SECURITY;
 
 -- 6. KEBIJAKAN AKSES (RLS POLICIES) - Dibuat hanya jika belum ada
 DO $$
@@ -67,6 +80,10 @@ BEGIN
   IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to fragments' AND tablename = 'fragments') THEN
     CREATE POLICY "Allow public access to fragments" ON public.fragments FOR ALL USING (true) WITH CHECK (true);
   END IF;
+
+  IF NOT EXISTS (SELECT 1 FROM pg_policies WHERE policyname = 'Allow public access to discover_connections' AND tablename = 'discover_connections') THEN
+    CREATE POLICY "Allow public access to discover_connections" ON public.discover_connections FOR ALL USING (true) WITH CHECK (true);
+  END IF;
 END $$;
 
 -- 7. AKTIFKAN SUPABASE REALTIME SECARA AMAN
@@ -74,6 +91,7 @@ DO $$
 BEGIN
   ALTER TABLE public.notes REPLICA IDENTITY FULL;
   ALTER TABLE public.fragments REPLICA IDENTITY FULL;
+  ALTER TABLE public.discover_connections REPLICA IDENTITY FULL;
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_publication_tables 
@@ -87,6 +105,13 @@ BEGIN
     WHERE pubname = 'supabase_realtime' AND tablename = 'fragments'
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.fragments;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'discover_connections'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.discover_connections;
   END IF;
 END $$;
 

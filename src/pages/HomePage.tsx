@@ -30,7 +30,7 @@ export const HomePage: React.FC = () => {
     .slice(0, 4);
 
   const starredFragments = fragments.filter((f) => f.starred).slice(0, 3);
-  const totalWords = notes.reduce((acc, curr) => acc + (curr.wordCount || 0), 0);
+  const synthesizedCount = notes.filter((n) => n.tags?.includes('synthesis')).length;
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-6 sm:px-10 lg:px-14 py-8">
@@ -129,13 +129,13 @@ export const HomePage: React.FC = () => {
 
           <div className="p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28]">
             <span className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
-              Total Vocabulary
+              Synthesized Docs
             </span>
             <p className="font-serif text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] mt-1 tabular-nums">
-              {totalWords.toLocaleString()}
+              {synthesizedCount}
             </p>
             <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196] mt-0.5 block">
-              Words crafted
+              Distilled knowledge
             </span>
           </div>
 
@@ -213,9 +213,6 @@ export const HomePage: React.FC = () => {
                             {note.title || 'Untitled Note'}
                           </h3>
                         </div>
-                        <span className="text-[11px] font-mono tabular-nums text-[#9C9388] dark:text-[#736C62]">
-                          {note.wordCount} words
-                        </span>
                       </div>
 
                       <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 mt-1 leading-relaxed">

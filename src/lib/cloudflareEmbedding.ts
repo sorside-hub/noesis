@@ -121,10 +121,43 @@ export const generateBgeM3Embedding = async (
 };
 
 /**
+ * Unified semantic text builder for both Notes and Fragments:
+ * Includes Title, Content, Tags, and Source (omits Type to keep semantic matching topic-focused).
+ */
+export const buildEmbeddingPayload = (item: {
+  title?: string;
+  content?: string;
+  tags?: string[];
+  source?: string;
+}): string => {
+  const parts: string[] = [];
+  if (item.title?.trim()) {
+    parts.push(item.title.trim());
+  }
+  const cleanedContent = cleanTextForEmbedding(item.content || '');
+  if (cleanedContent) {
+    parts.push(cleanedContent);
+  }
+  const cleanTags = (item.tags || []).map((t) => t.trim()).filter(Boolean);
+  if (cleanTags.length > 0) {
+    parts.push(`Tags: ${cleanTags.join(', ')}`);
+  }
+  if (item.source?.trim()) {
+    parts.push(`Source: ${item.source.trim()}`);
+  }
+  return parts.join('\n\n');
+};
+
+/**
  * Embeds a note and persists the 1024-dimension vector to Supabase
  */
 export const embedAndSyncNote = async (note: Note): Promise<boolean> => {
-  const textToEmbed = `${note.title}\n\n${cleanTextForEmbedding(note.content)}\n\nTags: ${(note.tags || []).join(', ')}`;
+  const textToEmbed = buildEmbeddingPayload({
+    title: note.title,
+    content: note.content,
+    tags: note.tags,
+    source: note.source,
+  });
   const vector = await generateBgeM3Embedding(textToEmbed);
 
   if (vector && vector.length === 1024 && isSupabaseConfigured()) {
@@ -141,7 +174,12 @@ export const embedAndSyncNote = async (note: Note): Promise<boolean> => {
  * Embeds a fragment and persists the 1024-dimension vector to Supabase
  */
 export const embedAndSyncFragment = async (frag: Fragment): Promise<boolean> => {
-  const textToEmbed = `${frag.title}\n\n${cleanTextForEmbedding(frag.content)}\n\nCategory: ${frag.type}`;
+  const textToEmbed = buildEmbeddingPayload({
+    title: frag.title,
+    content: frag.content,
+    tags: frag.tags,
+    source: frag.source,
+  });
   const vector = await generateBgeM3Embedding(textToEmbed);
 
   if (vector && vector.length === 1024 && isSupabaseConfigured()) {

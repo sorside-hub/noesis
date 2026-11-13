@@ -1,5 +1,19 @@
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, ReactNode } from 'react';
-import { ViewMode, ThemePreference, Note, Relic, Fragment, Project, RelicType, FragmentType, NoteType, StreamFilter } from '../types';
+import {
+  ViewMode,
+  ThemePreference,
+  Note,
+  Relic,
+  Fragment,
+  Project,
+  RelicType,
+  FragmentType,
+  NoteType,
+  StreamFilter,
+  DiscoverSourceItem,
+  ConnectionAnalysis,
+  DiscoverConnectionRecord,
+} from '../types';
 import { INITIAL_NOTES, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
 import {
   isSupabaseConfigured,
@@ -11,13 +25,24 @@ import {
   deleteFragmentFromSupabase,
   subscribeToRealtimeChanges,
   searchNotesSemantic,
+  searchFragmentsSemantic,
+  fetchDiscoverConnectionsFromSupabase,
+  upsertDiscoverConnectionToSupabase,
+  restoreDismissedDiscoverConnectionsInSupabase,
+  unlinkDiscoverConnectionInSupabase,
 } from '../lib/supabase';
 import {
   isCloudflareAiConfigured,
   embedAndSyncNote,
   embedAndSyncFragment,
   generateBgeM3Embedding,
+  cleanTextForEmbedding,
 } from '../lib/cloudflareEmbedding';
+import {
+  makePairKey,
+  noteToDiscoverItem,
+  fragmentToDiscoverItem,
+} from '../lib/discoverAi';
 
 interface NoesisContextType {
   // Theme
@@ -95,6 +120,29 @@ interface NoesisContextType {
   setSemanticSensitivity: (sensitivity: 'broad' | 'standard' | 'strict') => void;
   semanticThreshold: number;
   performSemanticNoteSearch: (query: string) => Promise<{ id: string; similarity: number }[] | null>;
+
+  // Discover & Synthesis Foundation
+  dismissedConnections: string[];
+  approvedConnections: string[];
+  connectionAnalyses: Record<string, ConnectionAnalysis>;
+  dismissConnection: (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => void;
+  approveConnection: (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => void;
+  saveConnectionAnalysis: (
+    itemA: DiscoverSourceItem,
+    itemB: DiscoverSourceItem,
+    analysis: ConnectionAnalysis
+  ) => void;
+  unlinkDiscoverConnection: (idA: string, idB: string) => void;
+  promoteFragmentToNote: (fragmentId: string) => string | null;
+  resetDismissedConnections: () => void;
+  performUnifiedSemanticSearch: (query: string, customThreshold?: number) => Promise<DiscoverSourceItem[]>;
+  saveSynthesizedNote: (params: {
+    title: string;
+    htmlContent: string;
+    tags: string[];
+    sourceItems: DiscoverSourceItem[];
+    type?: NoteType;
+  }) => string;
 }
 
 const NoesisContext = createContext<NoesisContextType | undefined>(undefined);
@@ -222,8 +270,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isCloudflareConnected, setIsCloudflareConnected] = useState<boolean>(isCloudflareAiConfigured());
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
 
-  // Debounce ref for auto-embedding notes
+  // Debounce refs for auto-embedding notes and already-embedded fragments
   const embedTimersRef = useRef<{ [noteId: string]: NodeJS.Timeout }>({});
+  const fragEmbedTimersRef = useRef<{ [fragmentId: string]: NodeJS.Timeout }>({});
 
   // Sync entities to localStorage on state changes
   useEffect(() => {
@@ -244,11 +293,31 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     if (!isSupabaseConfigured()) return;
 
     let isMounted = true;
+    const applyDbDiscoverConnections = (dbConns: DiscoverConnectionRecord[], onlyIfNonEmpty = false) => {
+      if (onlyIfNonEmpty && dbConns.length === 0) return;
+
+      const dbApproved = dbConns.filter((c) => c.status === 'approved').map((c) => c.pairKey);
+      const dbDismissed = dbConns.filter((c) => c.status === 'dismissed').map((c) => c.pairKey);
+      setApprovedConnections(dbApproved);
+      setDismissedConnections(dbDismissed);
+
+      const dbAnalyses: Record<string, ConnectionAnalysis> = {};
+      for (const row of dbConns) {
+        if (row.analysis) {
+          dbAnalyses[row.pairKey] = row.analysis;
+        }
+      }
+      if (Object.keys(dbAnalyses).length > 0) {
+        setConnectionAnalyses((prev) => ({ ...prev, ...dbAnalyses }));
+      }
+    };
+
     const initSupabaseSync = async () => {
       try {
-        const [dbNotes, dbFragments] = await Promise.all([
+        const [dbNotes, dbFragments, dbDiscoverConns] = await Promise.all([
           fetchNotesFromSupabase(),
           fetchFragmentsFromSupabase(),
+          fetchDiscoverConnectionsFromSupabase(),
         ]);
 
         if (dbNotes !== null && isMounted) {
@@ -260,6 +329,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         if (dbFragments !== null && isMounted) {
           setFragments(dbFragments);
+        }
+
+        if (dbDiscoverConns !== null && isMounted) {
+          applyDbDiscoverConnections(dbDiscoverConns, true);
         }
 
         setIsSupabaseConnected(true);
@@ -282,6 +355,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const latestFragments = await fetchFragmentsFromSupabase();
         if (latestFragments !== null && isMounted) {
           setFragments(latestFragments);
+        }
+      },
+      async () => {
+        const latestConns = await fetchDiscoverConnectionsFromSupabase();
+        if (latestConns !== null && isMounted) {
+          applyDbDiscoverConnections(latestConns, false);
         }
       }
     );
@@ -312,7 +391,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       relatedNoteIds: [],
       createdAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
-      wordCount: 0,
     };
 
     setNotes((prev) => [newNote, ...prev]);
@@ -481,23 +559,25 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       tags: data.tags,
       source: data.source,
       date: formatDateDDMMYYYY(),
+      updatedAt: new Date().toISOString(),
       starred: false,
     };
     setFragments((prev) => [newFragment, ...prev]);
 
     if (isSupabaseConfigured()) {
-      upsertFragmentToSupabase(newFragment, null).catch(console.warn);
+      upsertFragmentToSupabase(newFragment).catch(console.warn);
     }
 
     return id;
   };
 
   const updateFragment = (id: string, updates: Partial<Fragment>) => {
+    const updatedAt = new Date().toISOString();
     let updatedFragObj: Fragment | undefined;
     setFragments((prev) =>
       prev.map((f) => {
         if (f.id === id) {
-          const updated = { ...f, ...updates };
+          const updated = { ...f, ...updates, updatedAt };
           updatedFragObj = updated;
           return updated;
         }
@@ -506,7 +586,25 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     );
 
     if (isSupabaseConfigured() && updatedFragObj) {
-      upsertFragmentToSupabase(updatedFragObj, null).catch(console.warn);
+      // Preserve existing vector embedding unless user explicitly removes it
+      upsertFragmentToSupabase(updatedFragObj).catch(console.warn);
+
+      // Only auto re-embed if the user already opted this Fragment into vector embedding
+      if (updatedFragObj.embeddedAt) {
+        const snapshot = updatedFragObj;
+        if (fragEmbedTimersRef.current[id]) {
+          clearTimeout(fragEmbedTimersRef.current[id]);
+        }
+        fragEmbedTimersRef.current[id] = setTimeout(async () => {
+          const ok = await embedAndSyncFragment(snapshot);
+          if (ok) {
+            const nowIso = new Date().toISOString();
+            setFragments((prev) =>
+              prev.map((f) => (f.id === id ? { ...f, embeddedAt: nowIso } : f))
+            );
+          }
+        }, 1500);
+      }
     }
   };
 
@@ -525,7 +623,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       prev.map((f) => {
         if (f.id === id) {
           const updated = { ...f, starred: !f.starred };
-          if (isSupabaseConfigured()) upsertFragmentToSupabase(updated, null).catch(console.warn);
+          if (isSupabaseConfigured()) upsertFragmentToSupabase(updated).catch(console.warn);
           return updated;
         }
         return f;
@@ -576,7 +674,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
 
     for (const frag of fragments) {
-      const ok = await upsertFragmentToSupabase(frag, null);
+      // Keep raw fragments un-embedded unless already embedded; never wipe existing vectors
+      const ok = frag.embeddedAt
+        ? await embedAndSyncFragment(frag)
+        : await upsertFragmentToSupabase(frag);
       if (ok) fragmentsCount++;
     }
 
@@ -691,6 +792,343 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
+  // Discover & Synthesis Foundation State (Offline-first + Supabase Sync)
+  const [dismissedConnections, setDismissedConnections] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('noesis_dismissed_connections');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [approvedConnections, setApprovedConnections] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem('noesis_approved_connections');
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
+  const [connectionAnalyses, setConnectionAnalyses] = useState<
+    Record<string, ConnectionAnalysis>
+  >(() => {
+    try {
+      const saved = localStorage.getItem('noesis_discover_analyses');
+      return saved ? JSON.parse(saved) : {};
+    } catch {
+      return {};
+    }
+  });
+
+  useEffect(() => {
+    localStorage.setItem('noesis_dismissed_connections', JSON.stringify(dismissedConnections));
+  }, [dismissedConnections]);
+
+  useEffect(() => {
+    localStorage.setItem('noesis_approved_connections', JSON.stringify(approvedConnections));
+  }, [approvedConnections]);
+
+  useEffect(() => {
+    localStorage.setItem('noesis_discover_analyses', JSON.stringify(connectionAnalyses));
+  }, [connectionAnalyses]);
+
+  const buildCanonicalPair = (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => {
+    const first = itemA.id < itemB.id ? itemA : itemB;
+    const second = itemA.id < itemB.id ? itemB : itemA;
+    return {
+      pairKey: makePairKey(itemA.id, itemB.id),
+      first,
+      second,
+    };
+  };
+
+  const dismissConnection = (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => {
+    const { pairKey, first, second } = buildCanonicalPair(itemA, itemB);
+    setDismissedConnections((prev) => (prev.includes(pairKey) ? prev : [...prev, pairKey]));
+    setApprovedConnections((prev) => prev.filter((k) => k !== pairKey));
+
+    if (isSupabaseConfigured()) {
+      upsertDiscoverConnectionToSupabase({
+        pairKey,
+        itemAId: first.id,
+        itemAKind: first.kind,
+        itemBId: second.id,
+        itemBKind: second.kind,
+        status: 'dismissed',
+        analysis: connectionAnalyses[pairKey],
+        updatedAt: new Date().toISOString(),
+      }).catch(console.warn);
+    }
+  };
+
+  const resetDismissedConnections = () => {
+    setDismissedConnections([]);
+    if (isSupabaseConfigured()) {
+      restoreDismissedDiscoverConnectionsInSupabase().catch(console.warn);
+    }
+  };
+
+  const approveConnection = (itemA: DiscoverSourceItem, itemB: DiscoverSourceItem) => {
+    const { pairKey, first, second } = buildCanonicalPair(itemA, itemB);
+    setApprovedConnections((prev) => (prev.includes(pairKey) ? prev : [...prev, pairKey]));
+    setDismissedConnections((prev) => prev.filter((k) => k !== pairKey));
+
+    if (itemA.kind === 'note' && itemB.kind === 'note') {
+      linkRelatedNote(itemA.id, itemB.id);
+    }
+
+    if (isSupabaseConfigured()) {
+      upsertDiscoverConnectionToSupabase({
+        pairKey,
+        itemAId: first.id,
+        itemAKind: first.kind,
+        itemBId: second.id,
+        itemBKind: second.kind,
+        status: 'approved',
+        analysis: connectionAnalyses[pairKey],
+        updatedAt: new Date().toISOString(),
+      }).catch(console.warn);
+    }
+  };
+
+  const saveConnectionAnalysis = (
+    itemA: DiscoverSourceItem,
+    itemB: DiscoverSourceItem,
+    analysis: ConnectionAnalysis
+  ) => {
+    const { pairKey, first, second } = buildCanonicalPair(itemA, itemB);
+    setConnectionAnalyses((prev) => ({
+      ...prev,
+      [pairKey]: analysis,
+    }));
+
+    if (isSupabaseConfigured()) {
+      const currentStatus = approvedConnections.includes(pairKey)
+        ? 'approved'
+        : dismissedConnections.includes(pairKey)
+        ? 'dismissed'
+        : 'pending';
+
+      upsertDiscoverConnectionToSupabase({
+        pairKey,
+        itemAId: first.id,
+        itemAKind: first.kind,
+        itemBId: second.id,
+        itemBKind: second.kind,
+        status: currentStatus,
+        analysis,
+        updatedAt: new Date().toISOString(),
+      }).catch(console.warn);
+    }
+  };
+
+  const unlinkDiscoverConnection = (idA: string, idB: string) => {
+    const pairKey = makePairKey(idA, idB);
+    setApprovedConnections((prev) => prev.filter((k) => k !== pairKey));
+    if (isSupabaseConfigured()) {
+      unlinkDiscoverConnectionInSupabase(pairKey).catch(console.warn);
+    }
+  };
+
+  const promoteFragmentToNote = (fragmentId: string): string | null => {
+    const frag = fragments.find((f) => f.id === fragmentId);
+    if (!frag) return null;
+
+    const escapeHtml = (str: string) =>
+      str
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+
+    const paragraphs = (frag.content || '')
+      .split(/\n{2,}/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`)
+      .join('');
+
+    const htmlContent = paragraphs || '<p></p>';
+    const plainText = cleanTextForEmbedding(htmlContent);
+    const newId = `note-${Date.now()}`;
+    const now = new Date().toISOString();
+
+    const newNote: Note = {
+      id: newId,
+      title: frag.title || 'Untitled Note',
+      content: htmlContent,
+      excerpt: plainText.slice(0, 180),
+      type: frag.type || 'thought',
+      tags: frag.tags && frag.tags.length > 0 ? [...frag.tags] : ['fragment'],
+      source: frag.source || `Dikembangkan dari Fragment: ${frag.title}`,
+      favorite: Boolean(frag.starred),
+      archived: false,
+      relatedNoteIds: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    setNotes((prev) => [newNote, ...prev]);
+
+    if (isSupabaseConfigured()) {
+      embedAndSyncNote(newNote).catch(() => {
+        upsertNoteToSupabase(newNote).catch(console.warn);
+      });
+    }
+
+    // Link the promoted Note back to the source Fragment without removing the Fragment
+    approveConnection(noteToDiscoverItem(newNote), fragmentToDiscoverItem(frag));
+
+    setActiveNoteId(newId);
+    setActiveView('editor');
+    closeFragmentDrawer();
+    return newId;
+  };
+
+  const performUnifiedSemanticSearch = async (
+    query: string,
+    customThreshold?: number
+  ): Promise<DiscoverSourceItem[]> => {
+    const trimmed = query.trim();
+    if (!trimmed) return [];
+
+    const threshold = customThreshold ?? Math.min(semanticThreshold, 0.38);
+
+    // Try vector semantic search across both Notes & Fragments if Supabase is connected
+    if (isSupabaseConfigured()) {
+      try {
+        const vector = await generateBgeM3Embedding(trimmed);
+        if (vector) {
+          const [noteResults, fragmentResults] = await Promise.all([
+            searchNotesSemantic(vector, threshold, 15),
+            searchFragmentsSemantic(vector, threshold, 15),
+          ]);
+
+          const merged: DiscoverSourceItem[] = [];
+          const activeNoteIds = new Set(notes.filter((n) => !n.archived).map((n) => n.id));
+
+          if (noteResults) {
+            for (const r of noteResults) {
+              if (activeNoteIds.has(r.item.id) || notes.length === 0) {
+                merged.push(noteToDiscoverItem(r.item, r.similarity));
+              }
+            }
+          }
+
+          if (fragmentResults) {
+            for (const r of fragmentResults) {
+              merged.push(fragmentToDiscoverItem(r.item, r.similarity));
+            }
+          }
+
+          if (merged.length > 0) {
+            merged.sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+            return merged;
+          }
+        }
+      } catch (err) {
+        console.warn('performUnifiedSemanticSearch vector fallback:', err);
+      }
+    }
+
+    // Local keyword/tag fallback (for offline or unembedded notes/fragments)
+    const terms = trimmed.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
+    const localItems: DiscoverSourceItem[] = [
+      ...notes.filter((n) => !n.archived).map((n) => noteToDiscoverItem(n)),
+      ...fragments.map((f) => fragmentToDiscoverItem(f)),
+    ];
+
+    const scored = localItems
+      .map((item) => {
+        const haystack = `${item.title} ${cleanTextForEmbedding(item.content)} ${(item.tags || []).join(' ')}`.toLowerCase();
+        let hits = 0;
+        for (const term of terms) {
+          if (haystack.includes(term)) hits++;
+        }
+        const score = terms.length > 0 ? hits / terms.length : 0;
+        return { ...item, similarity: score };
+      })
+      .filter((item) => (item.similarity || 0) > 0)
+      .sort((a, b) => (b.similarity || 0) - (a.similarity || 0));
+
+    return scored.slice(0, 20);
+  };
+
+  const saveSynthesizedNote = ({
+    title,
+    htmlContent,
+    tags,
+    sourceItems,
+    type = 'thought',
+  }: {
+    title: string;
+    htmlContent: string;
+    tags: string[];
+    sourceItems: DiscoverSourceItem[];
+    type?: NoteType;
+  }): string => {
+    const newId = `note-${Date.now()}`;
+    const noteIds = Array.from(
+      new Set(sourceItems.filter((item) => item.kind === 'note').map((item) => item.id))
+    );
+    const fragmentItems = sourceItems.filter((item) => item.kind === 'fragment');
+
+    const sourceListHtml = sourceItems
+      .map(
+        (item) =>
+          `<li>[${item.kind === 'fragment' ? 'Fragment' : 'Catatan'}] ${item.title || 'Tanpa Judul'}</li>`
+      )
+      .join('');
+
+    const finalHtml = `${htmlContent}<hr><p><strong>Sumber Pengetahuan (${sourceItems.length}):</strong></p><ul>${sourceListHtml}</ul>`;
+    const plainText = cleanTextForEmbedding(finalHtml);
+    const excerpt = plainText.slice(0, 180);
+    const now = new Date().toISOString();
+
+    const cleanTags = Array.from(
+      new Set(['synthesis', ...tags.map((t) => t.trim().toLowerCase().replace(/^#/, '')).filter(Boolean)])
+    );
+
+    const sourceLabel = `Disintesis dari ${noteIds.length} catatan${fragmentItems.length > 0 ? ` & ${fragmentItems.length} fragments` : ''}`;
+
+    const newNote: Note = {
+      id: newId,
+      title: title.trim() || 'Dokumen Sintesis',
+      content: finalHtml,
+      excerpt,
+      type,
+      tags: cleanTags,
+      source: sourceLabel,
+      favorite: false,
+      archived: false,
+      relatedNoteIds: noteIds,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    // Save synthesized document to Library & link bidirectionally without modifying source contents
+    setNotes((prev) => {
+      const updatedExisting = prev.map((n) => {
+        if (noteIds.includes(n.id) && !n.relatedNoteIds.includes(newId)) {
+          const linked = { ...n, relatedNoteIds: [...n.relatedNoteIds, newId] };
+          if (isSupabaseConfigured()) upsertNoteToSupabase(linked).catch(console.warn);
+          return linked;
+        }
+        return n;
+      });
+      return [newNote, ...updatedExisting];
+    });
+
+    if (isSupabaseConfigured()) {
+      embedAndSyncNote(newNote).catch(() => {
+        upsertNoteToSupabase(newNote).catch(console.warn);
+      });
+    }
+
+    return newId;
+  };
+
   return (
     <NoesisContext.Provider
       value={{
@@ -754,6 +1192,17 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setSemanticSensitivity,
         semanticThreshold,
         performSemanticNoteSearch,
+        dismissedConnections,
+        approvedConnections,
+        connectionAnalyses,
+        dismissConnection,
+        approveConnection,
+        saveConnectionAnalysis,
+        unlinkDiscoverConnection,
+        promoteFragmentToNote,
+        resetDismissedConnections,
+        performUnifiedSemanticSearch,
+        saveSynthesizedNote,
       }}
     >
       {children}

@@ -14,6 +14,9 @@ import {
   Plus,
   Quote,
   Sparkles,
+  ArrowUpRight,
+  GitBranch,
+  FileText,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 
@@ -22,7 +25,14 @@ export const FragmentDrawer: React.FC = () => {
     isFragmentDrawerOpen,
     activeFragmentId,
     closeFragmentDrawer,
+    notes,
     fragments,
+    approvedConnections,
+    unlinkDiscoverConnection,
+    openFragmentDrawer,
+    setActiveNoteId,
+    setActiveView,
+    promoteFragmentToNote,
     createFragment,
     updateFragment,
     deleteFragment,
@@ -108,6 +118,39 @@ export const FragmentDrawer: React.FC = () => {
   }, [activeFragment, activeFragmentId, isFragmentDrawerOpen]);
 
   if (!isFragmentDrawerOpen) return null;
+
+  // Resolve Notes & Fragments linked to this Fragment via approved Discover connections
+  const connectedItems: { id: string; kind: 'note' | 'fragment'; title: string; type: string }[] = [];
+  if (!isCreateMode && activeFragment && approvedConnections.length > 0) {
+    const linkedIds = new Set<string>();
+    for (const pairKey of approvedConnections) {
+      const [idA, idB] = pairKey.split('::');
+      if (idA === activeFragment.id) linkedIds.add(idB);
+      else if (idB === activeFragment.id) linkedIds.add(idA);
+    }
+
+    for (const n of notes) {
+      if (!n.archived && linkedIds.has(n.id)) {
+        connectedItems.push({
+          id: n.id,
+          kind: 'note',
+          title: n.title || 'Untitled Note',
+          type: n.type,
+        });
+      }
+    }
+
+    for (const f of fragments) {
+      if (f.id !== activeFragment.id && linkedIds.has(f.id)) {
+        connectedItems.push({
+          id: f.id,
+          kind: 'fragment',
+          title: f.title || 'Untitled Fragment',
+          type: f.type,
+        });
+      }
+    }
+  }
 
   const categories: { id: FragmentType; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
     { id: 'thought', label: 'Thought', icon: Feather },
@@ -444,6 +487,79 @@ export const FragmentDrawer: React.FC = () => {
             </div>
           </div>
 
+          {/* Connected Notes & Fragments (Bidirectional with Editor & Discover) */}
+          {!isCreateMode && activeFragment && (
+            <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
+              <label className="text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1.5">
+                <GitBranch size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
+                <span>Terhubung Dengan ({connectedItems.length})</span>
+              </label>
+
+              {connectedItems.length === 0 ? (
+                <p className="text-xs text-[#9C9388] italic p-2.5 rounded-xl bg-white/60 dark:bg-[#221F1E]/50 border border-[#E8E2D8]/70 dark:border-[#2F2B28]/70">
+                  Belum ada catatan yang tertaut ke fragment ini.
+                </p>
+              ) : (
+                <div className="space-y-1.5">
+                  {connectedItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (item.kind === 'note') {
+                            closeFragmentDrawer();
+                            setActiveNoteId(item.id);
+                            setActiveView('editor');
+                          } else {
+                            openFragmentDrawer(item.id);
+                          }
+                        }}
+                        className="text-left flex-1 min-w-0"
+                      >
+                        <div className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                          {item.title}
+                        </div>
+                        <span className="text-[10px] font-mono text-[#9C9388] uppercase">
+                          {item.kind === 'note' ? 'Catatan Library' : 'Fragment'} · {item.type}
+                        </span>
+                      </button>
+
+                      <div className="flex items-center gap-1 shrink-0">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (item.kind === 'note') {
+                              closeFragmentDrawer();
+                              setActiveNoteId(item.id);
+                              setActiveView('editor');
+                            } else {
+                              openFragmentDrawer(item.id);
+                            }
+                          }}
+                          className="p-1 text-[#9C9388] hover:text-[#9A3412]"
+                          title="Buka"
+                        >
+                          <ArrowUpRight size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => unlinkDiscoverConnection(activeFragment.id, item.id)}
+                          className="p-1 text-[#9C9388] hover:text-red-600"
+                          title="Lepas tautan"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Optional Vector Embedding (bge-m3) */}
           {!isCreateMode && activeFragment && (
             <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
@@ -521,10 +637,16 @@ export const FragmentDrawer: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="px-5 sm:px-6 py-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] flex items-center justify-between shrink-0">
-            <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
-              Changes saved automatically
-            </span>
+          <div className="px-5 sm:px-6 py-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] flex items-center justify-between gap-2 shrink-0">
+            <button
+              type="button"
+              onClick={() => activeFragment && promoteFragmentToNote(activeFragment.id)}
+              className="px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:border-[#9A3412] hover:text-[#9A3412] dark:hover:text-[#EA580C] transition-colors flex items-center gap-1.5"
+              title="Buat Note baru di Library dari fragment ini tanpa menghapus fragment asli"
+            >
+              <FileText size={13} />
+              <span>Kembangkan jadi Note</span>
+            </button>
 
             <button
               type="button"

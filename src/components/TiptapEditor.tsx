@@ -31,13 +31,14 @@ import {
   Sliders,
   Archive,
   BarChart2,
-  Clock,
   FileText,
   Sparkles,
   Database,
   Feather,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { fetchAllVectorEmbeddings, VectorMapResult } from '../lib/supabase';
+import { computeRelatedNoteSuggestions } from '../lib/discoverAi';
 
 interface TiptapEditorProps {
   isFullScreen?: boolean;
@@ -55,6 +56,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     linkRelatedNote,
     unlinkRelatedNote,
     notes,
+    fragments,
+    approvedConnections,
+    unlinkDiscoverConnection,
+    openFragmentDrawer,
     setActiveNoteId,
     setActiveView,
     createNote,
@@ -96,6 +101,17 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [sourceInput, setSourceInput] = useState(activeNote?.source || '');
   const [searchRelatedQuery, setSearchRelatedQuery] = useState('');
   const [showLinkSearchDropdown, setShowLinkSearchDropdown] = useState(false);
+  const [vectorMap, setVectorMap] = useState<VectorMapResult | null>(null);
+
+  // Lazy-load stored vector map when opening Link Note dropdown so Saran Terkait can use BGE-M3 vectors
+  useEffect(() => {
+    if (!showLinkSearchDropdown || vectorMap !== null || !isSupabaseConnected) return;
+    fetchAllVectorEmbeddings()
+      .then((res) => {
+        if (res) setVectorMap(res);
+      })
+      .catch(console.warn);
+  }, [showLinkSearchDropdown, vectorMap, isSupabaseConnected]);
 
   // Sync title and source when activeNote changes
   useEffect(() => {
@@ -134,10 +150,8 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       if (activeNote) {
         const html = editor.getHTML();
         const text = editor.getText();
-        const wordCount = text.trim() ? text.trim().split(/\s+/).length : 0;
         updateNote(activeNote.id, {
           content: html,
-          wordCount,
           excerpt: text.slice(0, 140) + (text.length > 140 ? '...' : ''),
         });
       }
@@ -280,6 +294,24 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     );
   }, [unlinkedNotes, searchRelatedQuery]);
 
+  // Optional click-to-link suggestions (top 4 closest unlinked notes)
+  const suggestedRelatedNotes = useMemo(() => {
+    if (!activeNote || unlinkedNotes.length === 0) return [];
+    return computeRelatedNoteSuggestions(activeNote, unlinkedNotes, vectorMap, 4);
+  }, [activeNote, unlinkedNotes, vectorMap]);
+
+  // Fragments linked to this Note via approved Discover connections
+  const relatedFragments = useMemo(() => {
+    if (!activeNote || approvedConnections.length === 0) return [];
+    const linkedFragIds = new Set<string>();
+    for (const pairKey of approvedConnections) {
+      const [idA, idB] = pairKey.split('::');
+      if (idA === activeNote.id) linkedFragIds.add(idB);
+      else if (idB === activeNote.id) linkedFragIds.add(idA);
+    }
+    return fragments.filter((f) => linkedFragIds.has(f.id));
+  }, [activeNote, approvedConnections, fragments]);
+
   if (!activeNote || !editor) {
     return (
       <div className="flex-1 flex flex-col items-center justify-center p-8 text-center bg-[#FAF7F2] dark:bg-[#151413]">
@@ -307,10 +339,6 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       </div>
     );
   }
-
-  const wordCount = editor.getText().trim() ? editor.getText().trim().split(/\s+/).length : 0;
-  const charCount = editor.getText().length;
-  const readingTimeMin = Math.ceil(wordCount / 200) || 1;
 
   const getTypeStyle = (t: NoteType) => {
     switch (t) {
@@ -830,11 +858,11 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               </form>
             </div>
 
-            {/* 4. Related Note */}
+            {/* 4. Related Note & Connected Fragments */}
             <div className="space-y-3 pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28]">
               <div className="flex items-center justify-between">
                 <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
-                  Related Note ({relatedNotes.length})
+                  Related Note ({relatedNotes.length + relatedFragments.length})
                 </label>
                 <button
                   onClick={() => setShowLinkSearchDropdown((prev) => !prev)}
@@ -855,6 +883,35 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                     className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
                     autoFocus
                   />
+
+                  {/* Optional Click-to-Link Suggestions */}
+                  {!searchRelatedQuery.trim() && suggestedRelatedNotes.length > 0 && (
+                    <div className="space-y-1 pb-1.5 border-b border-[#E8E2D8] dark:border-[#2F2B28]">
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] flex items-center gap-1 px-1">
+                        <Sparkles size={10} />
+                        <span>Saran Terkait</span>
+                      </div>
+                      {suggestedRelatedNotes.map(({ note: noteItem, reason }) => (
+                        <div
+                          key={`sug-${noteItem.id}`}
+                          onClick={() => {
+                            linkRelatedNote(activeNote.id, noteItem.id);
+                            setShowLinkSearchDropdown(false);
+                            setSearchRelatedQuery('');
+                          }}
+                          className="p-1.5 rounded-lg bg-[#FAF7F2] dark:bg-[#151413] hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between gap-2"
+                        >
+                          <span className="font-serif truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                            {noteItem.title || 'Untitled Note'}
+                          </span>
+                          <span className="text-[9px] font-mono text-[#9C9388] shrink-0">
+                            {reason === 'vector' ? 'Mirip makna' : 'Mirip konsep'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
                   <div className="max-h-36 overflow-y-auto space-y-1">
                     {filteredUnlinkedNotes.length === 0 ? (
                       <p className="text-[11px] text-[#9C9388] p-1.5 italic">No matching notes</p>
@@ -867,10 +924,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                             setShowLinkSearchDropdown(false);
                             setSearchRelatedQuery('');
                           }}
-                          className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between"
+                          className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between gap-2"
                         >
-                          <span className="font-serif truncate">{noteItem.title}</span>
-                          <span className="text-[10px] font-mono text-[#9C9388] uppercase">
+                          <span className="font-serif truncate">{noteItem.title || 'Untitled Note'}</span>
+                          <span className="text-[10px] font-mono text-[#9C9388] uppercase shrink-0">
                             {noteItem.type}
                           </span>
                         </div>
@@ -881,79 +938,87 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               )}
 
               <div className="space-y-2">
-                {relatedNotes.length === 0 ? (
+                {relatedNotes.length === 0 && relatedFragments.length === 0 ? (
                   <p className="text-xs text-[#9C9388] italic p-2 bg-white/50 dark:bg-[#221F1E]/50 rounded-xl border border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 text-center">
                     No related note linked.
                   </p>
                 ) : (
-                  relatedNotes.map((item) => (
-                    <div
-                      key={item.id}
-                      className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
-                    >
+                  <>
+                    {relatedNotes.map((item) => (
                       <div
-                        onClick={() => setActiveNoteId(item.id)}
-                        className="cursor-pointer flex-1 truncate"
-                        title="Jump to note"
+                        key={item.id}
+                        className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
                       >
-                        <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
-                          {item.title}
-                        </h5>
-                        <span className="text-[10px] font-mono text-[#9C9388] uppercase">
-                          {item.type}
-                        </span>
-                      </div>
-
-                      <div className="flex items-center gap-1 shrink-0">
-                        <button
+                        <div
                           onClick={() => setActiveNoteId(item.id)}
-                          className="p-1 text-[#9C9388] hover:text-[#9A3412]"
-                          title="Open Note"
+                          className="cursor-pointer flex-1 truncate"
+                          title="Jump to note"
                         >
-                          <ArrowUpRight size={13} />
-                        </button>
-                        <button
-                          onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
-                          className="p-1 text-[#9C9388] hover:text-red-600"
-                          title="Unlink note"
-                        >
-                          <X size={13} />
-                        </button>
+                          <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                            {item.title}
+                          </h5>
+                          <span className="text-[10px] font-mono text-[#9C9388] uppercase">
+                            {item.type}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => setActiveNoteId(item.id)}
+                            className="p-1 text-[#9C9388] hover:text-[#9A3412]"
+                            title="Open Note"
+                          >
+                            <ArrowUpRight size={13} />
+                          </button>
+                          <button
+                            onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
+                            className="p-1 text-[#9C9388] hover:text-red-600"
+                            title="Unlink note"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))
+                    ))}
+
+                    {relatedFragments.map((frag) => (
+                      <div
+                        key={frag.id}
+                        className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
+                      >
+                        <div
+                          onClick={() => openFragmentDrawer(frag.id)}
+                          className="cursor-pointer flex-1 truncate"
+                          title="Open fragment"
+                        >
+                          <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                            {frag.title}
+                          </h5>
+                          <span className="text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] uppercase">
+                            Fragment · {frag.type}
+                          </span>
+                        </div>
+
+                        <div className="flex items-center gap-1 shrink-0">
+                          <button
+                            onClick={() => openFragmentDrawer(frag.id)}
+                            className="p-1 text-[#9C9388] hover:text-[#9A3412]"
+                            title="Open Fragment"
+                          >
+                            <ArrowUpRight size={13} />
+                          </button>
+                          <button
+                            onClick={() => unlinkDiscoverConnection(activeNote.id, frag.id)}
+                            className="p-1 text-[#9C9388] hover:text-red-600"
+                            title="Unlink fragment"
+                          >
+                            <X size={13} />
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </>
                 )}
-              </div>
-            </div>
-
-            {/* 5. Statistic Note */}
-            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
-                Statistic Note
-              </label>
-
-              <div className="grid grid-cols-2 gap-2 text-xs font-mono">
-                <div className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28]">
-                  <span className="text-[10px] text-[#9C9388] uppercase block">Words</span>
-                  <span className="text-base font-serif font-medium text-[#221F1D] dark:text-[#EDE8E1] tabular-nums">
-                    {wordCount}
-                  </span>
-                </div>
-
-                <div className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28]">
-                  <span className="text-[10px] text-[#9C9388] uppercase block">Characters</span>
-                  <span className="text-base font-serif font-medium text-[#221F1D] dark:text-[#EDE8E1] tabular-nums">
-                    {charCount}
-                  </span>
-                </div>
-              </div>
-
-              <div className="flex items-center justify-between text-xs font-mono text-[#6B635B] dark:text-[#A8A196] px-1 pt-1">
-                <span className="text-[#9C9388] flex items-center gap-1">
-                  <Clock size={12} />
-                  <span>Reading Time:</span>
-                </span>
-                <span className="tabular-nums font-medium">{readingTimeMin} min</span>
               </div>
             </div>
 
@@ -1119,36 +1184,146 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               </form>
             </div>
 
-            {/* 4. Related Note */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
-                Related Note ({relatedNotes.length})
-              </label>
-              <div className="space-y-1.5 max-h-32 overflow-y-auto">
-                {relatedNotes.map((item) => (
-                  <div
-                    key={item.id}
-                    className="p-2 rounded-lg bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-xs"
-                  >
-                    <span className="font-serif truncate">{item.title}</span>
-                    <button
-                      onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
-                      className="text-[#9C9388] hover:text-red-600"
-                    >
-                      <X size={13} />
-                    </button>
-                  </div>
-                ))}
+            {/* 4. Related Note & Connected Fragments */}
+            <div className="space-y-2.5 pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28]">
+              <div className="flex items-center justify-between">
+                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388]">
+                  Related Note ({relatedNotes.length + relatedFragments.length})
+                </label>
+                <button
+                  type="button"
+                  onClick={() => setShowLinkSearchDropdown((prev) => !prev)}
+                  className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
+                >
+                  <Plus size={12} />
+                  <span>Link Note</span>
+                </button>
               </div>
-            </div>
 
-            {/* 5. Statistic Note */}
-            <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] text-xs font-mono flex items-center justify-between text-[#6B635B]">
-              <span>{wordCount} words</span>
-              <span>·</span>
-              <span>{charCount} characters</span>
-              <span>·</span>
-              <span>{readingTimeMin} min read</span>
+              {showLinkSearchDropdown && (
+                <div className="p-2.5 bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl space-y-2">
+                  <input
+                    type="text"
+                    value={searchRelatedQuery}
+                    onChange={(e) => setSearchRelatedQuery(e.target.value)}
+                    placeholder="Search note to link..."
+                    className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                  />
+
+                  {!searchRelatedQuery.trim() && suggestedRelatedNotes.length > 0 && (
+                    <div className="space-y-1 pb-1.5 border-b border-[#E8E2D8] dark:border-[#2F2B28]">
+                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] flex items-center gap-1 px-1">
+                        <Sparkles size={10} />
+                        <span>Saran Terkait</span>
+                      </div>
+                      {suggestedRelatedNotes.map(({ note: noteItem, reason }) => (
+                        <div
+                          key={`m-sug-${noteItem.id}`}
+                          onClick={() => {
+                            linkRelatedNote(activeNote.id, noteItem.id);
+                            setShowLinkSearchDropdown(false);
+                            setSearchRelatedQuery('');
+                          }}
+                          className="p-1.5 rounded-lg bg-[#FAF7F2] dark:bg-[#151413] text-xs flex items-center justify-between gap-2"
+                        >
+                          <span className="font-serif truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                            {noteItem.title || 'Untitled Note'}
+                          </span>
+                          <span className="text-[9px] font-mono text-[#9C9388] shrink-0">
+                            {reason === 'vector' ? 'Mirip makna' : 'Mirip konsep'}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+
+                  <div className="max-h-32 overflow-y-auto space-y-1">
+                    {filteredUnlinkedNotes.length === 0 ? (
+                      <p className="text-[11px] text-[#9C9388] p-1.5 italic">No matching notes</p>
+                    ) : (
+                      filteredUnlinkedNotes.map((noteItem) => (
+                        <div
+                          key={`m-opt-${noteItem.id}`}
+                          onClick={() => {
+                            linkRelatedNote(activeNote.id, noteItem.id);
+                            setShowLinkSearchDropdown(false);
+                            setSearchRelatedQuery('');
+                          }}
+                          className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] text-xs flex items-center justify-between gap-2"
+                        >
+                          <span className="font-serif truncate">{noteItem.title || 'Untitled Note'}</span>
+                          <span className="text-[10px] font-mono text-[#9C9388] uppercase shrink-0">
+                            {noteItem.type}
+                          </span>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-1.5 max-h-40 overflow-y-auto">
+                {relatedNotes.length === 0 && relatedFragments.length === 0 ? (
+                  <p className="text-xs text-[#9C9388] italic p-2 bg-white/50 dark:bg-[#221F1E]/50 rounded-xl border border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 text-center">
+                    No related note linked.
+                  </p>
+                ) : (
+                  <>
+                    {relatedNotes.map((item) => (
+                      <div
+                        key={item.id}
+                        className="p-2 rounded-lg bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 text-xs"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setActiveNoteId(item.id);
+                            setShowMobileInspector(false);
+                          }}
+                          className="font-serif truncate text-left flex-1 text-[#221F1D] dark:text-[#EDE8E1]"
+                        >
+                          {item.title}
+                        </button>
+                        <button
+                          onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
+                          className="text-[#9C9388] hover:text-red-600 shrink-0"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+
+                    {relatedFragments.map((frag) => (
+                      <div
+                        key={frag.id}
+                        className="p-2 rounded-lg bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 text-xs"
+                      >
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowMobileInspector(false);
+                            openFragmentDrawer(frag.id);
+                          }}
+                          className="text-left flex-1 truncate"
+                        >
+                          <span className="font-serif block truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                            {frag.title}
+                          </span>
+                          <span className="text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] uppercase">
+                            Fragment
+                          </span>
+                        </button>
+                        <button
+                          onClick={() => unlinkDiscoverConnection(activeNote.id, frag.id)}
+                          className="text-[#9C9388] hover:text-red-600 shrink-0"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ))}
+                  </>
+                )}
+              </div>
             </div>
 
             {/* 6. Semantic Embedding (bge-m3) */}

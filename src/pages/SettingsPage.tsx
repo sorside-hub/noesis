@@ -32,7 +32,6 @@ export const SettingsPage: React.FC = () => {
   const [copiedSql, setCopiedSql] = useState(false);
   const [resetNotice, setResetNotice] = useState(false);
   const [fontSize, setFontSize] = useState<'standard' | 'generous' | 'large'>('standard');
-  const [showWordCount, setShowWordCount] = useState(true);
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
@@ -152,29 +151,6 @@ export const SettingsPage: React.FC = () => {
                 <div className="text-[10px] font-mono text-[#9C9388] mt-0.5">{opt.sub}</div>
               </button>
             ))}
-          </div>
-
-          <div className="flex items-center justify-between pt-3 border-t border-[#E8E2D8]/60 dark:border-[#2F2B28]/60">
-            <div>
-              <span className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] block">
-                Editor Telemetry Strip
-              </span>
-              <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
-                Tampilkan statistik jumlah kata & karakter pada catatan.
-              </span>
-            </div>
-            <button
-              onClick={() => setShowWordCount((prev) => !prev)}
-              className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors shrink-0 ${
-                showWordCount ? 'bg-[#9A3412]' : 'bg-[#E8E2D8] dark:bg-[#3D3834]'
-              }`}
-            >
-              <span
-                className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
-                  showWordCount ? 'translate-x-6' : 'translate-x-1'
-                }`}
-              />
-            </button>
           </div>
         </div>
 

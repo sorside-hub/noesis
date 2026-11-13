@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { Note, Fragment } from '../types';
+import { Note, Fragment, DiscoverConnectionRecord } from '../types';
 
 export const getSupabaseUrl = (): string => {
   return (
@@ -64,7 +64,6 @@ export const toDbNote = (note: Note, embedding?: number[] | null) => {
     favorite: Boolean(note.favorite),
     archived: Boolean(note.archived),
     related_note_ids: note.relatedNoteIds || [],
-    word_count: note.wordCount || 0,
     created_at: note.createdAt || new Date().toISOString(),
     updated_at: note.updatedAt || new Date().toISOString(),
     embedded_at: note.embeddedAt || null,
@@ -96,7 +95,6 @@ export const fromDbNote = (row: any): Note => {
     relatedNoteIds: row.related_note_ids || [],
     createdAt: row.created_at || new Date().toISOString(),
     updatedAt: row.updated_at || new Date().toISOString(),
-    wordCount: Number(row.word_count) || 0,
     embeddedAt: row.embedded_at || undefined,
   };
 };
@@ -317,13 +315,197 @@ export const searchFragmentsSemantic = async (
   }
 };
 
+const parsePgVector = (raw: unknown): number[] | null => {
+  if (!raw) return null;
+  if (Array.isArray(raw)) {
+    return raw.length === 1024 ? raw.map(Number) : null;
+  }
+  if (typeof raw === 'string') {
+    try {
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed) && parsed.length === 1024) {
+        return parsed.map(Number);
+      }
+    } catch {
+      return null;
+    }
+  }
+  return null;
+};
+
+export interface VectorMapResult {
+  noteVectors: Map<string, number[]>;
+  fragmentVectors: Map<string, number[]>;
+}
+
+/**
+ * Fetches stored 1024-dimension vectors for Notes & Fragments from Supabase
+ * Used to compute connection candidates & topic clusters across both tables.
+ */
+export const fetchAllVectorEmbeddings = async (): Promise<VectorMapResult | null> => {
+  const client = getSupabaseClient();
+  if (!client) return null;
+
+  try {
+    const [notesRes, fragsRes] = await Promise.all([
+      client
+        .from('notes')
+        .select('id, embedding')
+        .not('embedding', 'is', null)
+        .eq('archived', false),
+      client
+        .from('fragments')
+        .select('id, embedding')
+        .not('embedding', 'is', null),
+    ]);
+
+    const noteVectors = new Map<string, number[]>();
+    const fragmentVectors = new Map<string, number[]>();
+
+    if (!notesRes.error && Array.isArray(notesRes.data)) {
+      for (const row of notesRes.data) {
+        const vec = parsePgVector((row as any).embedding);
+        if (vec) noteVectors.set(row.id, vec);
+      }
+    }
+
+    if (!fragsRes.error && Array.isArray(fragsRes.data)) {
+      for (const row of fragsRes.data) {
+        const vec = parsePgVector((row as any).embedding);
+        if (vec) fragmentVectors.set(row.id, vec);
+      }
+    }
+
+    return { noteVectors, fragmentVectors };
+  } catch (err) {
+    console.warn('fetchAllVectorEmbeddings error:', err);
+    return null;
+  }
+};
+
+// ============================================================================
+// DISCOVER CONNECTIONS SYNC (Cross-Device Approved / Dismissed / Analysis)
+// ============================================================================
+
+const fromDbDiscoverConnection = (row: any): DiscoverConnectionRecord => ({
+  pairKey: row.pair_key,
+  itemAId: row.item_a_id,
+  itemAKind: row.item_a_kind || 'note',
+  itemBId: row.item_b_id,
+  itemBKind: row.item_b_kind || 'note',
+  status: row.status || 'pending',
+  analysis: row.analysis || undefined,
+  updatedAt: row.updated_at || new Date().toISOString(),
+});
+
+export const fetchDiscoverConnectionsFromSupabase = async (): Promise<
+  DiscoverConnectionRecord[] | null
+> => {
+  const client = getSupabaseClient();
+  if (!client) return null;
+  try {
+    const { data, error } = await client
+      .from('discover_connections')
+      .select('*')
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      console.warn('Supabase fetchDiscoverConnections error:', error.message);
+      return null;
+    }
+
+    return (data || []).map(fromDbDiscoverConnection);
+  } catch (err) {
+    console.warn('Supabase fetchDiscoverConnections network error:', err);
+    return null;
+  }
+};
+
+export const upsertDiscoverConnectionToSupabase = async (
+  record: DiscoverConnectionRecord
+): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('discover_connections').upsert(
+      {
+        pair_key: record.pairKey,
+        item_a_id: record.itemAId,
+        item_a_kind: record.itemAKind,
+        item_b_id: record.itemBId,
+        item_b_kind: record.itemBKind,
+        status: record.status,
+        analysis: record.analysis ?? null,
+        updated_at: record.updatedAt || new Date().toISOString(),
+      },
+      { onConflict: 'pair_key' }
+    );
+
+    if (error) {
+      console.warn('Supabase upsertDiscoverConnection error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase upsertDiscoverConnection network error:', err);
+    return false;
+  }
+};
+
+export const restoreDismissedDiscoverConnectionsInSupabase = async (): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client
+      .from('discover_connections')
+      .update({
+        status: 'pending',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('status', 'dismissed');
+
+    if (error) {
+      console.warn('Supabase restoreDismissedDiscoverConnections error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase restoreDismissedDiscoverConnections network error:', err);
+    return false;
+  }
+};
+
+export const unlinkDiscoverConnectionInSupabase = async (pairKey: string): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client
+      .from('discover_connections')
+      .update({
+        status: 'pending',
+        updated_at: new Date().toISOString(),
+      })
+      .eq('pair_key', pairKey);
+
+    if (error) {
+      console.warn('Supabase unlinkDiscoverConnection error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase unlinkDiscoverConnection network error:', err);
+    return false;
+  }
+};
+
 // ============================================================================
 // REALTIME LISTENER
 // ============================================================================
 
 export const subscribeToRealtimeChanges = (
   onNotesChange: () => void,
-  onFragmentsChange: () => void
+  onFragmentsChange: () => void,
+  onDiscoverConnectionsChange?: () => void
 ) => {
   if (!supabase) return () => {};
 
@@ -342,8 +524,19 @@ export const subscribeToRealtimeChanges = (
       () => {
         onFragmentsChange();
       }
-    )
-    .subscribe();
+    );
+
+  if (onDiscoverConnectionsChange) {
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'discover_connections' },
+      () => {
+        onDiscoverConnectionsChange();
+      }
+    );
+  }
+
+  channel.subscribe();
 
   return () => {
     supabase.removeChannel(channel);
