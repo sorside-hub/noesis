@@ -103,9 +103,12 @@ interface InternalUnifiedEntry {
 const buildUnifiedEntries = (
   notes: Note[],
   fragments: Fragment[],
-  vectorMap?: VectorMapResult | null
+  vectorMap?: VectorMapResult | null,
+  options?: { excludeSynthesisNotes?: boolean }
 ): InternalUnifiedEntry[] => {
-  const activeNotes = notes.filter((n) => !n.archived);
+  const activeNotes = notes.filter(
+    (n) => !n.archived && !(options?.excludeSynthesisNotes && n.type === 'synthesis')
+  );
   const entries: InternalUnifiedEntry[] = [];
 
   for (const n of activeNotes) {
@@ -139,7 +142,9 @@ export const computeConnectionCandidates = (
 ): ConnectionCandidate[] => {
   const minVectorThreshold = options.minVectorThreshold ?? 0.48;
   const limit = options.limit ?? 12;
-  const entries = buildUnifiedEntries(notes, fragments, vectorMap);
+  const entries = buildUnifiedEntries(notes, fragments, vectorMap, {
+    excludeSynthesisNotes: true,
+  });
   const candidates: ConnectionCandidate[] = [];
 
   for (let i = 0; i < entries.length; i++) {
@@ -206,7 +211,9 @@ export const computeTopicClusters = (
   const minClusterSize = options.minClusterSize ?? 3;
   const maxClusters = options.maxClusters ?? 6;
 
-  const entries = buildUnifiedEntries(notes, fragments, vectorMap);
+  const entries = buildUnifiedEntries(notes, fragments, vectorMap, {
+    excludeSynthesisNotes: true,
+  });
   if (entries.length < minClusterSize) return [];
 
   // Build adjacency list of similar items
@@ -315,6 +322,77 @@ export const computeRelatedNoteSuggestions = (
 
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, limit).map(({ note, reason }) => ({ note, reason }));
+};
+
+export interface SynthesisUpdateSuggestion {
+  item: DiscoverSourceItem;
+  basis: 'vector' | 'semantic-keyword';
+  score: number;
+}
+
+/**
+ * Recommends un-included Notes & Fragments relevant to an existing Synthesis document
+ * for the 1 + N -> 1 Update Synthesis workflow (excludes other synthesis docs and already-included items).
+ */
+export const computeSynthesisUpdateSuggestions = (
+  baseSynthesisNote: Note,
+  notes: Note[],
+  fragments: Fragment[],
+  alreadyIncludedIds: Set<string>,
+  vectorMap: VectorMapResult | null,
+  limit = 6
+): SynthesisUpdateSuggestion[] => {
+  const baseItem = noteToDiscoverItem(baseSynthesisNote);
+  const baseVec = vectorMap?.noteVectors.get(baseSynthesisNote.id);
+  const scored: SynthesisUpdateSuggestion[] = [];
+
+  for (const n of notes) {
+    if (
+      n.archived ||
+      n.type === 'synthesis' ||
+      n.id === baseSynthesisNote.id ||
+      alreadyIncludedIds.has(n.id)
+    ) {
+      continue;
+    }
+
+    const item = noteToDiscoverItem(n);
+    const candidateVec = vectorMap?.noteVectors.get(n.id);
+
+    if (baseVec && candidateVec) {
+      const score = cosineSimilarity(baseVec, candidateVec);
+      if (score >= 0.42) {
+        scored.push({ item, basis: 'vector', score });
+      }
+    } else {
+      const score = computeKeywordSimilarity(baseItem, item);
+      if (score >= 0.14) {
+        scored.push({ item, basis: 'semantic-keyword', score });
+      }
+    }
+  }
+
+  for (const f of fragments) {
+    if (alreadyIncludedIds.has(f.id)) continue;
+
+    const item = fragmentToDiscoverItem(f);
+    const candidateVec = vectorMap?.fragmentVectors.get(f.id);
+
+    if (baseVec && candidateVec) {
+      const score = cosineSimilarity(baseVec, candidateVec);
+      if (score >= 0.42) {
+        scored.push({ item, basis: 'vector', score });
+      }
+    } else {
+      const score = computeKeywordSimilarity(baseItem, item);
+      if (score >= 0.14) {
+        scored.push({ item, basis: 'semantic-keyword', score });
+      }
+    }
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  return scored.slice(0, limit);
 };
 
 // ============================================================================

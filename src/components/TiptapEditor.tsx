@@ -42,6 +42,7 @@ import { computeRelatedNoteSuggestions } from '../lib/discoverAi';
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
 import { useBackOverlay } from '../hooks/useBackOverlay';
 import { useScrollRestoration } from '../hooks/useScrollRestoration';
+import { createTiptapClipboardProps } from '../lib/tiptapClipboard';
 
 interface TiptapEditorProps {
   isFullScreen?: boolean;
@@ -52,6 +53,8 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const {
     activeNote,
     updateNote,
+    flushNoteSave,
+    flushNoteOnExit,
     deleteNote,
     discardNoteIfEmpty,
     toggleFavoriteNote,
@@ -87,19 +90,28 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const isKeyboardOpen = useVirtualKeyboardOpen();
   const activeNoteIdRef = React.useRef(activeNote?.id);
   const blurTimeoutRef = React.useRef<ReturnType<typeof setTimeout> | null>(null);
+  const flushNoteSaveRef = React.useRef(flushNoteSave);
+  flushNoteSaveRef.current = flushNoteSave;
+  const flushNoteOnExitRef = React.useRef(flushNoteOnExit);
+  flushNoteOnExitRef.current = flushNoteOnExit;
+  const updateNoteRef = React.useRef(updateNote);
+  updateNoteRef.current = updateNote;
 
   useEffect(() => {
     activeNoteIdRef.current = activeNote?.id;
   }, [activeNote?.id]);
 
-  // When switching notes or leaving the editor, if previous note was empty, discard it automatically
+  // When switching notes or leaving the editor, discard if empty or flush & auto-embed on exit
   useEffect(() => {
     return () => {
       if (blurTimeoutRef.current) {
         clearTimeout(blurTimeoutRef.current);
       }
       if (activeNoteIdRef.current) {
-        discardNoteIfEmpty(activeNoteIdRef.current);
+        const wasDiscarded = discardNoteIfEmpty(activeNoteIdRef.current);
+        if (!wasDiscarded) {
+          void flushNoteOnExitRef.current(activeNoteIdRef.current, true);
+        }
       }
     };
   }, []);
@@ -149,7 +161,15 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setSearchRelatedQuery('');
   }, [activeNote?.id]);
 
+  const clipboardProps = useMemo(
+    () => createTiptapClipboardProps({ minHeadingLevel: 1, maxHeadingLevel: 3 }),
+    []
+  );
+
   const editor = useEditor({
+    enableCoreExtensions: {
+      clipboardTextSerializer: false,
+    },
     extensions: [
       StarterKit.configure({
         heading: {
@@ -171,8 +191,9 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     editorProps: {
       attributes: {
         class:
-          'prose dark:prose-invert max-w-none focus:outline-none min-h-[460px] text-[16px] leading-[1.85] text-[#292524] dark:text-[#E7E5E4] font-normal selection:bg-[#9A3412]/15 selection:text-[#9A3412] dark:selection:bg-[#C2410C]/30 dark:selection:text-[#FDBA74]',
+          'tiptap max-w-none focus:outline-none min-h-[460px] text-[16px] leading-[1.85] text-[#292524] dark:text-[#E7E5E4] font-normal selection:bg-[#9A3412]/15 selection:text-[#9A3412] dark:selection:bg-[#C2410C]/30 dark:selection:text-[#FDBA74]',
       },
+      ...clipboardProps,
     },
     onFocus: () => {
       if (blurTimeoutRef.current) {
@@ -182,6 +203,9 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       setIsEditorFocused(true);
     },
     onBlur: ({ editor: ed }) => {
+      if (activeNoteIdRef.current) {
+        flushNoteSaveRef.current(activeNoteIdRef.current);
+      }
       if (blurTimeoutRef.current) {
         clearTimeout(blurTimeoutRef.current);
       }
@@ -192,10 +216,11 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       }, 120);
     },
     onUpdate: ({ editor }) => {
-      if (activeNote) {
+      const currentId = activeNoteIdRef.current;
+      if (currentId) {
         const html = editor.getHTML();
         const text = editor.getText();
-        updateNote(activeNote.id, {
+        updateNoteRef.current(currentId, {
           content: html,
           excerpt: text.slice(0, 140) + (text.length > 140 ? '...' : ''),
         });
@@ -215,6 +240,15 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setTitle(newTitle);
     if (activeNote) {
       updateNote(activeNote.id, { title: newTitle });
+    }
+  };
+
+  const handleTitleBlur = () => {
+    if (activeNote) {
+      if (title !== activeNote.title) {
+        updateNote(activeNote.id, { title });
+      }
+      flushNoteSave(activeNote.id);
     }
   };
 
@@ -856,6 +890,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               type="text"
               value={title}
               onChange={handleTitleChange}
+              onBlur={handleTitleBlur}
               placeholder="Untitled Note"
               className="w-full font-serif text-2xl sm:text-4xl lg:text-5xl font-medium tracking-tight bg-transparent text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none placeholder:text-[#9C9388]/60 dark:placeholder:text-[#736C62]/60 border-none p-0"
             />

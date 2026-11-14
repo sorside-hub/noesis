@@ -5,16 +5,19 @@ import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import { useNoesis } from '../../context/NoesisContext';
 import { useBackOverlay } from '../../hooks/useBackOverlay';
+import { createTiptapClipboardProps } from '../../lib/tiptapClipboard';
 import {
   DiscoverSourceItem,
   SynthesisResult,
   SynthesisStyle,
 } from '../../types';
+import { VectorMapResult } from '../../lib/supabase';
 import {
   noteToDiscoverItem,
   fragmentToDiscoverItem,
   requestSynthesizeDocument,
   parseLegacySynthesisFooterItems,
+  computeSynthesisUpdateSuggestions,
 } from '../../lib/discoverAi';
 import {
   Sparkles,
@@ -45,9 +48,15 @@ export interface SynthesisSeedPayload {
 
 interface SynthesisWorkspaceProps {
   incomingSeed?: SynthesisSeedPayload | null;
+  vectorMap?: VectorMapResult | null;
+  isLoadingVectors?: boolean;
 }
 
-export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incomingSeed }) => {
+export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({
+  incomingSeed,
+  vectorMap = null,
+  isLoadingVectors = false,
+}) => {
   const {
     notes,
     fragments,
@@ -294,8 +303,29 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     return list;
   }, [candidateItems, allLibraryItems, selectedIds, baseSynthesisNote, alreadyIncludedIds]);
 
+  // Automatic recommendations of un-included raw Notes/Fragments relevant to baseSynthesisNote (Update Mode)
+  const recommendedUpdateItems = useMemo(() => {
+    if (workspaceMode !== 'update' || !baseSynthesisNote) return [];
+    return computeSynthesisUpdateSuggestions(
+      baseSynthesisNote,
+      notes,
+      fragments,
+      alreadyIncludedIds,
+      vectorMap,
+      6
+    );
+  }, [workspaceMode, baseSynthesisNote, notes, fragments, alreadyIncludedIds, vectorMap]);
+
+  const previewClipboardProps = useMemo(
+    () => createTiptapClipboardProps({ minHeadingLevel: 2, maxHeadingLevel: 3 }),
+    []
+  );
+
   // Tiptap WYSIWYG editor for editing synthesized document before saving
   const previewEditor = useEditor({
+    enableCoreExtensions: {
+      clipboardTextSerializer: false,
+    },
     extensions: [
       StarterKit.configure({
         heading: { levels: [2, 3] },
@@ -312,8 +342,9 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
     editorProps: {
       attributes: {
         class:
-          'tiptap prose dark:prose-invert max-w-none focus:outline-none min-h-[260px] text-sm sm:text-[15px] leading-relaxed text-[#292524] dark:text-[#E7E5E4] space-y-3 [&_h2]:font-serif [&_h2]:text-lg [&_h2]:sm:text-xl [&_h2]:font-medium [&_h2]:text-[#221F1D] [&_h2]:dark:text-[#EDE8E1] [&_h2]:mt-5 [&_h2]:mb-2 [&_h3]:font-serif [&_h3]:text-base [&_h3]:font-medium [&_h3]:text-[#221F1D] [&_h3]:dark:text-[#EDE8E1] [&_h3]:mt-4 [&_h3]:mb-1.5 [&_ul]:list-disc [&_ul]:pl-5 [&_ul]:space-y-1 [&_ol]:list-decimal [&_ol]:pl-5',
+          'tiptap max-w-none focus:outline-none min-h-[260px] text-sm sm:text-[15px] leading-relaxed text-[#292524] dark:text-[#E7E5E4]',
       },
+      ...previewClipboardProps,
     },
     onUpdate: ({ editor }) => {
       setDraftHtml(editor.getHTML());
@@ -987,6 +1018,84 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
               </div>
             )}
 
+            {/* Automatic Recommendations for Update Synthesis (1 + N -> 1) */}
+            {workspaceMode === 'update' && baseSynthesisNote && (
+              <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex items-center gap-1.5">
+                    <Sparkles size={13} className="text-[#6D28D9] dark:text-[#A78BFA]" />
+                    <span className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                      Materi Baru yang Mungkin Relevan
+                    </span>
+                  </div>
+                  <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+                    {isLoadingVectors && recommendedUpdateItems.length === 0
+                      ? 'Memindai kedekatan makna...'
+                      : recommendedUpdateItems.some((r) => r.basis === 'vector')
+                      ? 'Berdasarkan kedekatan makna'
+                      : recommendedUpdateItems.length > 0
+                      ? 'Berdasarkan kemiripan konsep & tag'
+                      : 'Belum ada kecocokan otomatis'}
+                  </span>
+                </div>
+
+                {recommendedUpdateItems.length > 0 ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    {recommendedUpdateItems.map(({ item, basis }) => {
+                      const isSelected = selectedIds.has(item.id);
+                      return (
+                        <button
+                          key={`rec-${item.id}`}
+                          type="button"
+                          onClick={() => toggleItemSelection(item)}
+                          className={`p-3 rounded-xl border text-left transition-all flex items-start gap-2.5 ${
+                            isSelected
+                              ? 'border-[#6D28D9] dark:border-[#A78BFA] bg-violet-50/70 dark:bg-violet-950/25 shadow-2xs'
+                              : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] hover:border-[#6D28D9]/50 dark:hover:border-[#A78BFA]/50'
+                          }`}
+                        >
+                          <div
+                            className={`w-4 h-4 rounded-md border flex items-center justify-center shrink-0 mt-0.5 transition-colors ${
+                              isSelected
+                                ? 'bg-[#6D28D9] dark:bg-[#7C3AED] border-[#6D28D9] dark:border-[#7C3AED] text-white'
+                                : 'border-[#D6CEBE] dark:border-[#443E3A]'
+                            }`}
+                          >
+                            {isSelected && <Check size={11} />}
+                          </div>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-1.5 text-[10px] font-mono">
+                              <span className="truncate">
+                                <span className="uppercase text-[#9A3412] dark:text-[#EA580C] font-semibold">
+                                  {item.kind === 'fragment' ? 'Fragment' : 'Catatan'}
+                                </span>
+                                <span className="text-[#9C9388]"> · {item.type}</span>
+                              </span>
+                              <span className="text-[9px] text-[#6D28D9] dark:text-[#A78BFA] shrink-0">
+                                {basis === 'vector' ? 'Makna dekat' : 'Konsep mirip'}
+                              </span>
+                            </div>
+                            <div className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] line-clamp-1 mt-0.5">
+                              {item.title}
+                            </div>
+                            <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196] line-clamp-1 mt-0.5">
+                              {item.excerpt || 'Tanpa isi'}
+                            </p>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  !isLoadingVectors && (
+                    <p className="text-xs text-[#9C9388] dark:text-[#736C62]">
+                      Belum ada catatan atau fragment baru yang cukup dekat secara otomatis. Gunakan pencarian topik atau Pemilih Manual di atas.
+                    </p>
+                  )
+                )}
+              </div>
+            )}
+
             {/* Inline Manual Note & Fragment Picker */}
             {isManualPickerOpen && (
               <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-3 animate-in fade-in duration-150">
@@ -1245,17 +1354,17 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
                           {
                             id: 'structured',
                             label: 'Master Note Terstruktur',
-                            desc: 'Sub-bab tematik, sudut pandang, & simpulan utuh.',
+                            desc: 'Sub-bab tematik, nuansa sudut pandang, & sintesis terbuka.',
                           },
                           {
                             id: 'essay',
                             label: 'Esai Mengalir',
-                            desc: 'Narasi reflektif dengan alur baca yang halus.',
+                            desc: 'Narasi reflektif dengan alur baca halus & jujur.',
                           },
                           {
                             id: 'brief',
                             label: 'Ringkasan Inti',
-                            desc: 'Poin-poin argumen kunci yang padat & langsung.',
+                            desc: 'Poin-poin gagasan inti & titik temu tanpa melebih-lebihkan.',
                           },
                         ].map((opt) => (
                           <button
@@ -1317,8 +1426,11 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
             </div>
           )}
 
-          {/* Empty Guidance Card when no search/selection yet */}
-          {!searchExecuted && selectedIds.size === 0 && !isManualPickerOpen && (
+          {/* Empty Guidance Card when no search/selection/recommendations yet */}
+          {!searchExecuted &&
+            selectedIds.size === 0 &&
+            !isManualPickerOpen &&
+            recommendedUpdateItems.length === 0 && (
             <div className="p-6 sm:p-8 rounded-2xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A]/60 border border-dashed border-[#D6CEBE] dark:border-[#332F2C] text-center space-y-2">
               <div className="w-10 h-10 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mx-auto">
                 <FileText size={18} />

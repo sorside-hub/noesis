@@ -32,6 +32,7 @@ const RELATIONSHIP_LABELS: Record<ConnectionRelationshipType, string> = {
   expanding: 'Memperluas Topik',
   contrasting: 'Sudut Berlawanan',
   foundational: 'Saling Mendasari',
+  loose: 'Bersinggungan Longgar',
 };
 
 const getGreeting = () => {

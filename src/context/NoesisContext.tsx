@@ -152,6 +152,8 @@ interface NoesisContextType {
   activeNote: Note | undefined;
   createNote: (type?: ManualNoteType) => string;
   updateNote: (id: string, updates: Partial<Note>) => void;
+  flushNoteSave: (id: string) => void;
+  flushNoteOnExit: (id: string, triggerAutoEmbed?: boolean) => Promise<void>;
   deleteNote: (id: string) => void;
   discardNoteIfEmpty: (id: string) => boolean;
   toggleFavoriteNote: (id: string) => void;
@@ -169,6 +171,8 @@ interface NoesisContextType {
   closeFragmentDrawer: () => void;
   createFragment: (data: { type: FragmentType; title: string; content: string; tags: string[]; source?: string }) => string;
   updateFragment: (id: string, updates: Partial<Fragment>) => void;
+  flushFragmentSave: (id: string) => void;
+  flushFragmentOnExit: (id: string, triggerAutoEmbed?: boolean) => Promise<void>;
   deleteFragment: (id: string) => void;
   toggleStarFragment: (id: string) => void;
   createRelic: (data: { type: RelicType; title: string; content: string; tags: string[]; source?: string }) => void;
@@ -586,9 +590,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
   const [autoSyncNotice, setAutoSyncNotice] = useState<string | null>(null);
 
-  // Debounce refs for auto-embedding notes and already-embedded fragments
-  const embedTimersRef = useRef<{ [noteId: string]: NodeJS.Timeout }>({});
-  const fragEmbedTimersRef = useRef<{ [fragmentId: string]: NodeJS.Timeout }>({});
+  // Debounce refs for saving notes/fragments (4s text debounce) and exit-only auto-embedding
+  const embedTimersRef = useRef<{ [noteId: string]: ReturnType<typeof setTimeout> }>({});
+  const fragEmbedTimersRef = useRef<{ [fragmentId: string]: ReturnType<typeof setTimeout> }>({});
+  const dirtyEmbedNoteIdsRef = useRef<Set<string>>(new Set());
+  const inFlightOrSavedVersionRef = useRef<Record<string, string>>({});
+  const dirtyEmbedFragmentIdsRef = useRef<Set<string>>(new Set());
+  const inFlightOrSavedFragVersionRef = useRef<Record<string, string>>({});
 
   // Latest-state refs for safe async sync & logout cleanup
   const authUserRef = useRef<User | null>(authUser);
@@ -621,6 +629,339 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return await upsertFragmentToSupabase(frag);
   };
 
+  const performFastNoteSave = async (
+    noteId: string,
+    expectedUid?: string
+  ): Promise<boolean> => {
+    const uid = expectedUid || authUserRef.current?.id;
+    if (!canRemoteSync() || !uid || authUserRef.current?.id !== uid) return false;
+
+    const latestNote = notesRef.current.find((n) => n.id === noteId);
+    if (!latestNote) return false;
+
+    if (inFlightOrSavedVersionRef.current[noteId] === latestNote.updatedAt) {
+      return true;
+    }
+
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return false;
+    }
+
+    const saveUpdatedAt = latestNote.updatedAt;
+    inFlightOrSavedVersionRef.current[noteId] = saveUpdatedAt;
+
+    const ok = await upsertNoteToSupabase(latestNote);
+    if (ok) {
+      if (authUserRef.current?.id === uid) {
+        dequeueUpsertNote(uid, noteId, saveUpdatedAt);
+      }
+      return true;
+    } else {
+      if (inFlightOrSavedVersionRef.current[noteId] === saveUpdatedAt) {
+        delete inFlightOrSavedVersionRef.current[noteId];
+      }
+      return false;
+    }
+  };
+
+  const flushNoteSave = (noteId: string) => {
+    if (!noteId) return;
+    if (embedTimersRef.current[noteId]) {
+      clearTimeout(embedTimersRef.current[noteId]);
+      delete embedTimersRef.current[noteId];
+    }
+    const uid = authUserRef.current?.id;
+    if (!canRemoteSync() || !uid) return;
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return;
+    }
+    void performFastNoteSave(noteId, uid);
+  };
+
+  const flushNoteOnExit = async (noteId: string, triggerAutoEmbed = true) => {
+    if (!noteId) return;
+
+    if (embedTimersRef.current[noteId]) {
+      clearTimeout(embedTimersRef.current[noteId]);
+      delete embedTimersRef.current[noteId];
+    }
+
+    const latestNote = notesRef.current.find((n) => n.id === noteId);
+    if (!latestNote) {
+      dirtyEmbedNoteIdsRef.current.delete(noteId);
+      return;
+    }
+
+    const uid = authUserRef.current?.id;
+    if (!canRemoteSync() || !uid) return;
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return;
+    }
+
+    const shouldAutoEmbed = triggerAutoEmbed && dirtyEmbedNoteIdsRef.current.has(noteId);
+    if (shouldAutoEmbed) {
+      dirtyEmbedNoteIdsRef.current.delete(noteId);
+    }
+
+    await performFastNoteSave(noteId, uid);
+
+    if (shouldAutoEmbed) {
+      const snapshotForEmbed = notesRef.current.find((n) => n.id === noteId);
+      if (!snapshotForEmbed) return;
+
+      const snapshotUpdatedAt = snapshotForEmbed.updatedAt;
+      const ok = await embedAndSyncNote(snapshotForEmbed);
+      if (ok) {
+        const currentAfter = notesRef.current.find((n) => n.id === noteId);
+        if (currentAfter && currentAfter.updatedAt === snapshotUpdatedAt) {
+          const embeddedAt = new Date().toISOString();
+          const withEmbed: Note = { ...currentAfter, embeddedAt };
+          notesRef.current = notesRef.current.map((n) =>
+            n.id === noteId ? withEmbed : n
+          );
+          setNotes((prev) =>
+            prev.map((n) => (n.id === noteId ? { ...n, embeddedAt } : n))
+          );
+          if (authUserRef.current?.id === uid) {
+            dequeueUpsertNote(uid, noteId, snapshotUpdatedAt);
+          }
+        } else if (currentAfter) {
+          // Note was edited again while embedding was in-flight; keep newer text on server & re-dirty
+          dirtyEmbedNoteIdsRef.current.add(noteId);
+          delete inFlightOrSavedVersionRef.current[noteId];
+          void performFastNoteSave(noteId, uid);
+        }
+      } else {
+        dirtyEmbedNoteIdsRef.current.add(noteId);
+      }
+    }
+  };
+
+  const mergeServerNotesWithLocalProtection = (
+    serverNotes: Note[],
+    pendingQueue: ReturnType<typeof loadPendingSyncQueue>
+  ): Note[] => {
+    const localMap = new Map(notesRef.current.map((n) => [n.id, n]));
+    const serverIds = new Set(serverNotes.map((n) => n.id));
+    const merged: Note[] = [];
+
+    for (const serverNote of serverNotes) {
+      const localNote = localMap.get(serverNote.id);
+      if (!localNote) {
+        merged.push(serverNote);
+        continue;
+      }
+
+      const serverMs = Date.parse(serverNote.updatedAt || '') || 0;
+      const localMs = Date.parse(localNote.updatedAt || '') || 0;
+      const hasPendingTimer = Boolean(embedTimersRef.current[localNote.id]);
+      const hasQueuedEdit = Boolean(pendingQueue.upsertNotes[localNote.id]);
+      const isCurrentlyOpen =
+        activeViewRef.current === 'editor' && activeNoteIdRef.current === localNote.id;
+
+      if (
+        hasPendingTimer ||
+        hasQueuedEdit ||
+        localMs > serverMs ||
+        (isCurrentlyOpen && localMs >= serverMs)
+      ) {
+        merged.push(localNote);
+      } else {
+        merged.push(serverNote);
+      }
+    }
+
+    for (const localNote of notesRef.current) {
+      if (serverIds.has(localNote.id)) continue;
+      if (pendingQueue.deleteNoteIds.includes(localNote.id)) continue;
+
+      const isNewQueued = Boolean(pendingQueue.upsertNotes[localNote.id]?.isNew);
+      const hasPendingTimer = Boolean(embedTimersRef.current[localNote.id]);
+      const isCurrentlyOpen =
+        activeViewRef.current === 'editor' && activeNoteIdRef.current === localNote.id;
+
+      if (isNewQueued || hasPendingTimer || isCurrentlyOpen) {
+        merged.push(localNote);
+      }
+    }
+
+    merged.sort(
+      (a, b) =>
+        (Date.parse(b.updatedAt || b.createdAt || '') || 0) -
+        (Date.parse(a.updatedAt || a.createdAt || '') || 0)
+    );
+    return merged;
+  };
+
+  const performFastFragmentSave = async (
+    fragmentId: string,
+    expectedUid?: string
+  ): Promise<boolean> => {
+    const uid = expectedUid || authUserRef.current?.id;
+    if (!canRemoteSync() || !uid || authUserRef.current?.id !== uid) return false;
+
+    const latestFrag = fragmentsRef.current.find((f) => f.id === fragmentId);
+    if (!latestFrag) return false;
+
+    const versionKey = latestFrag.updatedAt || latestFrag.date;
+    if (inFlightOrSavedFragVersionRef.current[fragmentId] === versionKey) {
+      return true;
+    }
+
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return false;
+    }
+
+    inFlightOrSavedFragVersionRef.current[fragmentId] = versionKey;
+
+    const ok = await upsertFragmentToSupabase(latestFrag);
+    if (ok) {
+      if (authUserRef.current?.id === uid) {
+        dequeueUpsertFragment(uid, fragmentId, versionKey);
+      }
+      return true;
+    } else {
+      if (inFlightOrSavedFragVersionRef.current[fragmentId] === versionKey) {
+        delete inFlightOrSavedFragVersionRef.current[fragmentId];
+      }
+      return false;
+    }
+  };
+
+  const flushFragmentSave = (fragmentId: string) => {
+    if (!fragmentId) return;
+    if (fragEmbedTimersRef.current[fragmentId]) {
+      clearTimeout(fragEmbedTimersRef.current[fragmentId]);
+      delete fragEmbedTimersRef.current[fragmentId];
+    }
+    const uid = authUserRef.current?.id;
+    if (!canRemoteSync() || !uid) return;
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return;
+    }
+    void performFastFragmentSave(fragmentId, uid);
+  };
+
+  const flushFragmentOnExit = async (fragmentId: string, triggerAutoEmbed = true) => {
+    if (!fragmentId) return;
+
+    if (fragEmbedTimersRef.current[fragmentId]) {
+      clearTimeout(fragEmbedTimersRef.current[fragmentId]);
+      delete fragEmbedTimersRef.current[fragmentId];
+    }
+
+    const latestFrag = fragmentsRef.current.find((f) => f.id === fragmentId);
+    if (!latestFrag) {
+      dirtyEmbedFragmentIdsRef.current.delete(fragmentId);
+      return;
+    }
+
+    const uid = authUserRef.current?.id;
+    if (!canRemoteSync() || !uid) return;
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return;
+    }
+
+    // Fragments only auto re-embed on exit if user previously opted this fragment into embedding
+    const shouldAutoEmbed =
+      triggerAutoEmbed &&
+      Boolean(latestFrag.embeddedAt) &&
+      dirtyEmbedFragmentIdsRef.current.has(fragmentId);
+    if (shouldAutoEmbed) {
+      dirtyEmbedFragmentIdsRef.current.delete(fragmentId);
+    }
+
+    await performFastFragmentSave(fragmentId, uid);
+
+    if (shouldAutoEmbed) {
+      const snapshotForEmbed = fragmentsRef.current.find((f) => f.id === fragmentId);
+      if (!snapshotForEmbed) return;
+
+      const snapshotVersion = snapshotForEmbed.updatedAt || snapshotForEmbed.date;
+      const ok = await embedAndSyncFragment(snapshotForEmbed);
+      if (ok) {
+        const currentAfter = fragmentsRef.current.find((f) => f.id === fragmentId);
+        const currentAfterVersion = currentAfter?.updatedAt || currentAfter?.date;
+        if (currentAfter && currentAfterVersion === snapshotVersion) {
+          const embeddedAt = new Date().toISOString();
+          const withEmbed: Fragment = { ...currentAfter, embeddedAt };
+          fragmentsRef.current = fragmentsRef.current.map((f) =>
+            f.id === fragmentId ? withEmbed : f
+          );
+          setFragments((prev) =>
+            prev.map((f) => (f.id === fragmentId ? { ...f, embeddedAt } : f))
+          );
+          if (authUserRef.current?.id === uid) {
+            dequeueUpsertFragment(uid, fragmentId, snapshotVersion);
+          }
+        } else if (currentAfter) {
+          dirtyEmbedFragmentIdsRef.current.add(fragmentId);
+          delete inFlightOrSavedFragVersionRef.current[fragmentId];
+          void performFastFragmentSave(fragmentId, uid);
+        }
+      } else {
+        dirtyEmbedFragmentIdsRef.current.add(fragmentId);
+      }
+    }
+  };
+
+  const mergeServerFragmentsWithLocalProtection = (
+    serverFragments: Fragment[],
+    pendingQueue: ReturnType<typeof loadPendingSyncQueue>
+  ): Fragment[] => {
+    const localMap = new Map(fragmentsRef.current.map((f) => [f.id, f]));
+    const serverIds = new Set(serverFragments.map((f) => f.id));
+    const merged: Fragment[] = [];
+
+    for (const serverFrag of serverFragments) {
+      const localFrag = localMap.get(serverFrag.id);
+      if (!localFrag) {
+        merged.push(serverFrag);
+        continue;
+      }
+
+      const serverMs = Date.parse(serverFrag.updatedAt || '') || 0;
+      const localMs = Date.parse(localFrag.updatedAt || '') || 0;
+      const hasPendingTimer = Boolean(fragEmbedTimersRef.current[localFrag.id]);
+      const hasQueuedEdit = Boolean(pendingQueue.upsertFragments[localFrag.id]);
+      const isCurrentlyOpen =
+        isFragmentDrawerOpenRef.current && activeFragmentIdRef.current === localFrag.id;
+
+      if (
+        hasPendingTimer ||
+        hasQueuedEdit ||
+        localMs > serverMs ||
+        (isCurrentlyOpen && localMs >= serverMs)
+      ) {
+        merged.push(localFrag);
+      } else {
+        merged.push(serverFrag);
+      }
+    }
+
+    for (const localFrag of fragmentsRef.current) {
+      if (serverIds.has(localFrag.id)) continue;
+      if (pendingQueue.deleteFragmentIds.includes(localFrag.id)) continue;
+
+      const isNewQueued = Boolean(pendingQueue.upsertFragments[localFrag.id]?.isNew);
+      const hasPendingTimer = Boolean(fragEmbedTimersRef.current[localFrag.id]);
+      const isCurrentlyOpen =
+        isFragmentDrawerOpenRef.current && activeFragmentIdRef.current === localFrag.id;
+
+      if (isNewQueued || hasPendingTimer || isCurrentlyOpen) {
+        merged.push(localFrag);
+      }
+    }
+
+    return merged;
+  };
+
   const markOfflineDirtyIfLoggedOut = () => {
     if (!authUserRef.current) {
       localStorage.setItem('noesis_offline_dirty', 'true');
@@ -643,6 +984,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     embedTimersRef.current = {};
     Object.values(fragEmbedTimersRef.current).forEach((t) => clearTimeout(t));
     fragEmbedTimersRef.current = {};
+    dirtyEmbedNoteIdsRef.current.clear();
+    inFlightOrSavedVersionRef.current = {};
+    dirtyEmbedFragmentIdsRef.current.clear();
+    inFlightOrSavedFragVersionRef.current = {};
 
     const contentKeys = [
       'noesis_notes',
@@ -658,6 +1003,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     contentKeys.forEach((k) => localStorage.removeItem(k));
     clearPendingSyncQueue();
 
+    notesRef.current = [];
+    fragmentsRef.current = [];
     setNotes([]);
     setFragments([]);
     setProjects([]);
@@ -1174,29 +1521,26 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
         const remainingQueue = loadPendingSyncQueue(uid);
 
-        if (
-          dbNotes !== null &&
-          Object.keys(remainingQueue.upsertNotes).length === 0 &&
-          remainingQueue.deleteNoteIds.length === 0 &&
-          isMounted
-        ) {
-          setNotes(dbNotes);
-          if (dbNotes.length > 0) {
+        if (dbNotes !== null && isMounted) {
+          const merged = mergeServerNotesWithLocalProtection(dbNotes, remainingQueue);
+          notesRef.current = merged;
+          setNotes(merged);
+          if (merged.length > 0) {
             setActiveNoteIdState((prevId) => {
-              const resolved = prevId || dbNotes[0].id;
+              const resolved = prevId || merged[0].id;
               activeNoteIdRef.current = resolved;
               return resolved;
             });
           }
         }
 
-        if (
-          dbFragments !== null &&
-          Object.keys(remainingQueue.upsertFragments).length === 0 &&
-          remainingQueue.deleteFragmentIds.length === 0 &&
-          isMounted
-        ) {
-          setFragments(dbFragments);
+        if (dbFragments !== null && isMounted) {
+          const mergedFrags = mergeServerFragmentsWithLocalProtection(
+            dbFragments,
+            remainingQueue
+          );
+          fragmentsRef.current = mergedFrags;
+          setFragments(mergedFrags);
         }
 
         if (
@@ -1243,6 +1587,19 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       if (isMounted) setSyncStatus('offline');
     };
     const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        if (activeViewRef.current === 'editor' && activeNoteIdRef.current) {
+          const activeId = activeNoteIdRef.current;
+          const target = notesRef.current.find((n) => n.id === activeId);
+          if (target && !isNoteEffectivelyEmpty(target)) {
+            void flushNoteOnExit(activeId, true);
+          }
+        }
+        if (isFragmentDrawerOpenRef.current && activeFragmentIdRef.current) {
+          void flushFragmentOnExit(activeFragmentIdRef.current, true);
+        }
+        return;
+      }
       if (document.visibilityState === 'visible' && isBrowserOnline()) {
         const q = loadPendingSyncQueue(uid);
         if (hasPendingSyncItems(q)) {
@@ -1251,8 +1608,22 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
     };
 
+    const handlePageHide = () => {
+      if (activeViewRef.current === 'editor' && activeNoteIdRef.current) {
+        const activeId = activeNoteIdRef.current;
+        const target = notesRef.current.find((n) => n.id === activeId);
+        if (target && !isNoteEffectivelyEmpty(target)) {
+          void flushNoteOnExit(activeId, true);
+        }
+      }
+      if (isFragmentDrawerOpenRef.current && activeFragmentIdRef.current) {
+        void flushFragmentOnExit(activeFragmentIdRef.current, true);
+      }
+    };
+
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
+    window.addEventListener('pagehide', handlePageHide);
     document.addEventListener('visibilitychange', handleVisibilityChange);
 
     // Subscribe to realtime changes (if queue has pending items, reconcile queue first!)
@@ -1265,7 +1636,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
         const latestNotes = await fetchNotesFromSupabase();
         if (latestNotes !== null && isMounted) {
-          setNotes(latestNotes);
+          const latestQueue = loadPendingSyncQueue(uid);
+          const merged = mergeServerNotesWithLocalProtection(latestNotes, latestQueue);
+          notesRef.current = merged;
+          setNotes(merged);
         }
       },
       async () => {
@@ -1276,7 +1650,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
         const latestFragments = await fetchFragmentsFromSupabase();
         if (latestFragments !== null && isMounted) {
-          setFragments(latestFragments);
+          const latestQueue = loadPendingSyncQueue(uid);
+          const mergedFrags = mergeServerFragmentsWithLocalProtection(
+            latestFragments,
+            latestQueue
+          );
+          fragmentsRef.current = mergedFrags;
+          setFragments(mergedFrags);
         }
       },
       async () => {
@@ -1296,6 +1676,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       isMounted = false;
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
+      window.removeEventListener('pagehide', handlePageHide);
       document.removeEventListener('visibilitychange', handleVisibilityChange);
       unsubscribe();
     };
@@ -1352,24 +1733,31 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const updateNote = (id: string, updates: Partial<Note>) => {
-    const updatedAt = new Date().toISOString();
-    let updatedObj: Note | undefined;
+    const current = notesRef.current.find((n) => n.id === id);
+    if (!current) return;
 
+    const updatedAt = new Date().toISOString();
+    const updatedObj: Note = { ...current, ...updates, updatedAt };
+
+    // Synchronously update notesRef so immediate flushes / exit handlers always see the latest text
+    notesRef.current = notesRef.current.map((n) => (n.id === id ? updatedObj : n));
     setNotes((prev) =>
-      prev.map((n) => {
-        if (n.id === id) {
-          const updated = { ...n, ...updates, updatedAt };
-          updatedObj = updated;
-          return updated;
-        }
-        return n;
-      })
+      prev.map((n) => (n.id === id ? { ...n, ...updates, updatedAt } : n))
     );
 
-    if (canRemoteSync() && updatedObj && authUserRef.current) {
+    const isContentEdit =
+      'title' in updates ||
+      'content' in updates ||
+      'tags' in updates ||
+      'source' in updates ||
+      'type' in updates;
+    if (isContentEdit) {
+      dirtyEmbedNoteIdsRef.current.add(id);
+    }
+
+    if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;
-      const snapshot = updatedObj;
-      enqueueUpsertNote(uid, id, snapshot.updatedAt, false);
+      enqueueUpsertNote(uid, id, updatedAt, false);
 
       if (embedTimersRef.current[id]) {
         clearTimeout(embedTimersRef.current[id]);
@@ -1380,14 +1768,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         return;
       }
 
-      embedTimersRef.current[id] = setTimeout(async () => {
-        if (!canRemoteSync() || authUserRef.current?.id !== uid) return;
-        const ok = await syncNoteWithFallback(snapshot);
-        if (ok && authUserRef.current?.id === uid) {
-          dequeueUpsertNote(uid, id, snapshot.updatedAt);
-        }
-      }, 1500);
-    } else if (updatedObj) {
+      // Fast text-only save with a calm 4s debounce; AI auto-embedding runs on note exit
+      embedTimersRef.current[id] = setTimeout(() => {
+        delete embedTimersRef.current[id];
+        void performFastNoteSave(id, uid);
+      }, 4000);
+    } else {
       markOfflineDirtyIfLoggedOut();
     }
   };
@@ -1503,6 +1889,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         clearTimeout(embedTimersRef.current[id]);
         delete embedTimersRef.current[id];
       }
+      dirtyEmbedNoteIdsRef.current.delete(id);
+      delete inFlightOrSavedVersionRef.current[id];
       const remaining = notesRef.current.filter((n) => n.id !== id);
       notesRef.current = remaining;
       setNotes(remaining);
@@ -1535,6 +1923,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       clearTimeout(embedTimersRef.current[id]);
       delete embedTimersRef.current[id];
     }
+    dirtyEmbedNoteIdsRef.current.delete(id);
+    delete inFlightOrSavedVersionRef.current[id];
     const remaining = notesRef.current.filter((n) => n.id !== id);
     notesRef.current = remaining;
     setNotes(remaining);
@@ -1630,7 +2020,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const prevNoteId = activeNoteIdRef.current;
     const targetNoteId = overrideNoteId ?? prevNoteId;
 
-    // Discard empty note if leaving editor or switching notes
+    // Discard empty note if leaving editor or switching notes; otherwise flush text + trigger auto-embed
     let discardedCurrentEditorNote = false;
     if (
       activeViewRef.current === 'editor' &&
@@ -1638,6 +2028,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       (view !== 'editor' || prevNoteId !== targetNoteId)
     ) {
       discardedCurrentEditorNote = discardNoteIfEmpty(prevNoteId);
+      if (!discardedCurrentEditorNote) {
+        void flushNoteOnExit(prevNoteId, true);
+      }
+    }
+
+    // Flush open fragment drawer edits & re-embed when navigating away to another view
+    if (isFragmentDrawerOpenRef.current && activeFragmentIdRef.current) {
+      void flushFragmentOnExit(activeFragmentIdRef.current, true);
     }
 
     // 1. Navigating to Home -> Always rewind cleanly to root (depth 0)
@@ -1773,6 +2171,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const openFragmentDrawer = (fragmentId?: string | null) => {
     setIsMobileDrawerOpen(false);
     const nextFragId = fragmentId ?? null;
+    if (
+      isFragmentDrawerOpenRef.current &&
+      activeFragmentIdRef.current &&
+      activeFragmentIdRef.current !== nextFragId
+    ) {
+      void flushFragmentOnExit(activeFragmentIdRef.current, true);
+    }
     lastFragmentIdRef.current = nextFragId;
     const poppedOverlays = dismissTopOverlaysSync();
     const baseCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
@@ -1821,6 +2226,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const closeFragmentDrawer = () => {
+    const prevOpenFragId = activeFragmentIdRef.current;
+    if (isFragmentDrawerOpenRef.current && prevOpenFragId) {
+      void flushFragmentOnExit(prevOpenFragId, true);
+    }
     lastFragmentIdRef.current = null;
     const poppedOverlays = dismissTopOverlaysSync();
     let targetCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
@@ -1852,7 +2261,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return;
     }
     if (activeViewRef.current === 'editor' && activeNoteIdRef.current) {
-      discardNoteIfEmpty(activeNoteIdRef.current);
       setActiveView('library');
     } else if (activeViewRef.current !== 'home') {
       setActiveView('home');
@@ -1867,9 +2275,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       // If currently inside an open note in Editor -> POP TO ROOT (return to main library list)
       if (activeViewRef.current === 'editor') {
         lastLibraryNoteIdRef.current = null;
-        if (activeNoteIdRef.current) {
-          discardNoteIfEmpty(activeNoteIdRef.current);
-        }
         setActiveView('library');
         return;
       }
@@ -2066,7 +2471,17 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           (incoming.view !== 'editor' || incoming.noteId !== prevEntry.noteId)
         ) {
           lastLibraryNoteIdRef.current = null;
-          discardNoteIfEmpty(prevEntry.noteId);
+          const wasDiscarded = discardNoteIfEmpty(prevEntry.noteId);
+          if (!wasDiscarded) {
+            void flushNoteOnExit(prevEntry.noteId, true);
+          }
+        }
+        if (
+          prevEntry?.fragmentDrawerOpen &&
+          prevEntry.fragmentId &&
+          (!incoming.fragmentDrawerOpen || incoming.fragmentId !== prevEntry.fragmentId)
+        ) {
+          void flushFragmentOnExit(prevEntry.fragmentId, true);
         }
         if (prevEntry?.fragmentDrawerOpen && !incoming.fragmentDrawerOpen) {
           lastFragmentIdRef.current = null;
@@ -2139,7 +2554,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       updatedAt: now,
       starred: false,
     };
-    setFragments((prev) => [newFragment, ...prev]);
+    const nextFragments = [newFragment, ...fragmentsRef.current];
+    fragmentsRef.current = nextFragments;
+    setFragments(nextFragments);
 
     if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;
@@ -2163,63 +2580,49 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const updateFragment = (id: string, updates: Partial<Fragment>) => {
+    const current = fragmentsRef.current.find((f) => f.id === id);
+    if (!current) return;
+
     const updatedAt = new Date().toISOString();
-    let updatedFragObj: Fragment | undefined;
+    const updatedFragObj: Fragment = { ...current, ...updates, updatedAt };
+
+    // Synchronously update fragmentsRef so immediate flushes / exit handlers always see latest text
+    fragmentsRef.current = fragmentsRef.current.map((f) =>
+      f.id === id ? updatedFragObj : f
+    );
     setFragments((prev) =>
-      prev.map((f) => {
-        if (f.id === id) {
-          const updated = { ...f, ...updates, updatedAt };
-          updatedFragObj = updated;
-          return updated;
-        }
-        return f;
-      })
+      prev.map((f) => (f.id === id ? { ...f, ...updates, updatedAt } : f))
     );
 
-    if (canRemoteSync() && updatedFragObj && authUserRef.current) {
+    const isContentEdit =
+      'title' in updates ||
+      'content' in updates ||
+      'tags' in updates ||
+      'source' in updates ||
+      'type' in updates;
+    if (isContentEdit && current.embeddedAt) {
+      dirtyEmbedFragmentIdsRef.current.add(id);
+    }
+
+    if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;
-      const snapshot = updatedFragObj;
       enqueueUpsertFragment(uid, id, updatedAt, false);
+
+      if (fragEmbedTimersRef.current[id]) {
+        clearTimeout(fragEmbedTimersRef.current[id]);
+      }
 
       if (!isBrowserOnline()) {
         setSyncStatus('offline');
         return;
       }
 
-      // Preserve existing vector embedding unless user explicitly removes it
-      upsertFragmentToSupabase(snapshot)
-        .then((ok) => {
-          if (ok && !snapshot.embeddedAt && authUserRef.current?.id === uid) {
-            dequeueUpsertFragment(uid, id, updatedAt);
-          }
-        })
-        .catch(console.warn);
-
-      // Only auto re-embed if the user already opted this Fragment into vector embedding
-      if (snapshot.embeddedAt) {
-        if (fragEmbedTimersRef.current[id]) {
-          clearTimeout(fragEmbedTimersRef.current[id]);
-        }
-        fragEmbedTimersRef.current[id] = setTimeout(async () => {
-          if (!canRemoteSync() || authUserRef.current?.id !== uid) return;
-          const ok = await embedAndSyncFragment(snapshot);
-          if (ok) {
-            const nowIso = new Date().toISOString();
-            setFragments((prev) =>
-              prev.map((f) => (f.id === id ? { ...f, embeddedAt: nowIso } : f))
-            );
-            if (authUserRef.current?.id === uid) {
-              dequeueUpsertFragment(uid, id, updatedAt);
-            }
-          } else {
-            const fallbackOk = await upsertFragmentToSupabase(snapshot);
-            if (fallbackOk && authUserRef.current?.id === uid) {
-              dequeueUpsertFragment(uid, id, updatedAt);
-            }
-          }
-        }, 1500);
-      }
-    } else if (updatedFragObj) {
+      // Fast text-only save with a calm 4s debounce; auto re-embed (if opted-in) runs on drawer exit
+      fragEmbedTimersRef.current[id] = setTimeout(() => {
+        delete fragEmbedTimersRef.current[id];
+        void performFastFragmentSave(id, uid);
+      }, 4000);
+    } else {
       markOfflineDirtyIfLoggedOut();
     }
   };
@@ -2229,6 +2632,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       clearTimeout(fragEmbedTimersRef.current[id]);
       delete fragEmbedTimersRef.current[id];
     }
+    dirtyEmbedFragmentIdsRef.current.delete(id);
+    delete inFlightOrSavedFragVersionRef.current[id];
     const nextFragments = fragmentsRef.current.filter((f) => f.id !== id);
     fragmentsRef.current = nextFragments;
     setFragments(nextFragments);
@@ -2254,31 +2659,29 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const toggleStarFragment = (id: string) => {
     markOfflineDirtyIfLoggedOut();
+    const current = fragmentsRef.current.find((f) => f.id === id);
+    if (!current) return;
     const now = new Date().toISOString();
-    const uid = authUserRef.current?.id;
+    const updated: Fragment = { ...current, starred: !current.starred, updatedAt: now };
+    fragmentsRef.current = fragmentsRef.current.map((f) => (f.id === id ? updated : f));
     setFragments((prev) =>
-      prev.map((f) => {
-        if (f.id === id) {
-          const updated = { ...f, starred: !f.starred, updatedAt: now };
-          if (canRemoteSync() && uid) {
-            enqueueUpsertFragment(uid, id, now, false);
-            if (isBrowserOnline()) {
-              upsertFragmentToSupabase(updated)
-                .then((ok) => {
-                  if (ok && authUserRef.current?.id === uid) {
-                    dequeueUpsertFragment(uid, id, now);
-                  }
-                })
-                .catch(console.warn);
-            } else {
-              setSyncStatus('offline');
-            }
-          }
-          return updated;
-        }
-        return f;
-      })
+      prev.map((f) => (f.id === id ? { ...f, starred: updated.starred, updatedAt: now } : f))
     );
+    const uid = authUserRef.current?.id;
+    if (canRemoteSync() && uid) {
+      enqueueUpsertFragment(uid, id, now, false);
+      if (isBrowserOnline()) {
+        upsertFragmentToSupabase(updated)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertFragment(uid, id, now);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
+    }
   };
 
   const createRelic = (data: { type: RelicType; title: string; content: string; tags: string[]; source?: string }) => {
@@ -2337,25 +2740,48 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   // Manual embed single note
   const manualEmbedNote = async (noteId: string): Promise<boolean> => {
-    const target = notes.find((n) => n.id === noteId);
+    if (embedTimersRef.current[noteId]) {
+      clearTimeout(embedTimersRef.current[noteId]);
+      delete embedTimersRef.current[noteId];
+    }
+    const target = notesRef.current.find((n) => n.id === noteId);
     if (!target) return false;
+    dirtyEmbedNoteIdsRef.current.delete(noteId);
+    const snapshotUpdatedAt = target.updatedAt;
     const ok = await embedAndSyncNote(target);
     if (ok) {
       const nowIso = new Date().toISOString();
-      setNotes((prev) =>
-        prev.map((n) => (n.id === noteId ? { ...n, embeddedAt: nowIso } : n))
-      );
+      const currentAfter = notesRef.current.find((n) => n.id === noteId);
+      if (currentAfter && currentAfter.updatedAt === snapshotUpdatedAt) {
+        notesRef.current = notesRef.current.map((n) =>
+          n.id === noteId ? { ...n, embeddedAt: nowIso } : n
+        );
+        setNotes((prev) =>
+          prev.map((n) => (n.id === noteId ? { ...n, embeddedAt: nowIso } : n))
+        );
+      }
+      if (authUserRef.current) {
+        dequeueUpsertNote(authUserRef.current.id, noteId, snapshotUpdatedAt);
+      }
     }
     return ok;
   };
 
   // Manual remove embed for note
   const manualRemoveEmbedNote = async (noteId: string): Promise<boolean> => {
-    const target = notes.find((n) => n.id === noteId);
+    if (embedTimersRef.current[noteId]) {
+      clearTimeout(embedTimersRef.current[noteId]);
+      delete embedTimersRef.current[noteId];
+    }
+    dirtyEmbedNoteIdsRef.current.delete(noteId);
+    const target = notesRef.current.find((n) => n.id === noteId);
     if (!target) return false;
     if (isSupabaseConfigured()) {
       const ok = await upsertNoteToSupabase({ ...target, embeddedAt: undefined }, null);
       if (ok) {
+        notesRef.current = notesRef.current.map((n) =>
+          n.id === noteId ? { ...n, embeddedAt: undefined } : n
+        );
         setNotes((prev) =>
           prev.map((n) => (n.id === noteId ? { ...n, embeddedAt: undefined } : n))
         );
@@ -2367,25 +2793,49 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   // Manual embed single fragment
   const manualEmbedFragment = async (fragmentId: string): Promise<boolean> => {
-    const target = fragments.find((f) => f.id === fragmentId);
+    if (fragEmbedTimersRef.current[fragmentId]) {
+      clearTimeout(fragEmbedTimersRef.current[fragmentId]);
+      delete fragEmbedTimersRef.current[fragmentId];
+    }
+    const target = fragmentsRef.current.find((f) => f.id === fragmentId);
     if (!target) return false;
+    dirtyEmbedFragmentIdsRef.current.delete(fragmentId);
+    const snapshotVersion = target.updatedAt || target.date;
     const ok = await embedAndSyncFragment(target);
     if (ok) {
       const nowIso = new Date().toISOString();
-      setFragments((prev) =>
-        prev.map((f) => (f.id === fragmentId ? { ...f, embeddedAt: nowIso } : f))
-      );
+      const currentAfter = fragmentsRef.current.find((f) => f.id === fragmentId);
+      const currentAfterVersion = currentAfter?.updatedAt || currentAfter?.date;
+      if (currentAfter && currentAfterVersion === snapshotVersion) {
+        fragmentsRef.current = fragmentsRef.current.map((f) =>
+          f.id === fragmentId ? { ...f, embeddedAt: nowIso } : f
+        );
+        setFragments((prev) =>
+          prev.map((f) => (f.id === fragmentId ? { ...f, embeddedAt: nowIso } : f))
+        );
+      }
+      if (authUserRef.current) {
+        dequeueUpsertFragment(authUserRef.current.id, fragmentId, snapshotVersion);
+      }
     }
     return ok;
   };
 
   // Manual remove embed for fragment
   const manualRemoveEmbedFragment = async (fragmentId: string): Promise<boolean> => {
-    const target = fragments.find((f) => f.id === fragmentId);
+    if (fragEmbedTimersRef.current[fragmentId]) {
+      clearTimeout(fragEmbedTimersRef.current[fragmentId]);
+      delete fragEmbedTimersRef.current[fragmentId];
+    }
+    dirtyEmbedFragmentIdsRef.current.delete(fragmentId);
+    const target = fragmentsRef.current.find((f) => f.id === fragmentId);
     if (!target) return false;
     if (isSupabaseConfigured()) {
       const ok = await upsertFragmentToSupabase({ ...target, embeddedAt: undefined }, null);
       if (ok) {
+        fragmentsRef.current = fragmentsRef.current.map((f) =>
+          f.id === fragmentId ? { ...f, embeddedAt: undefined } : f
+        );
         setFragments((prev) =>
           prev.map((f) => (f.id === fragmentId ? { ...f, embeddedAt: undefined } : f))
         );
@@ -2655,7 +3105,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const promoteFragmentToNote = async (
     fragmentId: string
   ): Promise<{ ok: boolean; noteId?: string; error?: string }> => {
-    const frag = fragments.find((f) => f.id === fragmentId);
+    const frag = fragmentsRef.current.find((f) => f.id === fragmentId);
     if (!frag) {
       return { ok: false, error: 'Fragment tidak ditemukan.' };
     }
@@ -3326,6 +3776,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         activeNote,
         createNote,
         updateNote,
+        flushNoteSave,
+        flushNoteOnExit,
         deleteNote,
         discardNoteIfEmpty,
         toggleFavoriteNote,
@@ -3336,6 +3788,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         relics: fragments,
         createFragment,
         updateFragment,
+        flushFragmentSave,
+        flushFragmentOnExit,
         deleteFragment,
         toggleStarFragment,
         createRelic,

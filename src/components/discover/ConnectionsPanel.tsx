@@ -58,6 +58,11 @@ const RELATIONSHIP_LABELS: Record<
     badgeClass:
       'bg-sky-500/10 text-sky-700 dark:text-sky-300 border-sky-500/20',
   },
+  loose: {
+    label: 'Bersinggungan Longgar',
+    badgeClass:
+      'bg-stone-500/10 text-[#6B635B] dark:text-[#A8A196] border-stone-400/30 dark:border-stone-600/40',
+  },
 };
 
 export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({

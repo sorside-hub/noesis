@@ -104,7 +104,8 @@ export type ConnectionRelationshipType =
   | 'complementary'
   | 'expanding'
   | 'contrasting'
-  | 'foundational';
+  | 'foundational'
+  | 'loose';
 
 export interface ConnectionAnalysis {
   relationshipType: ConnectionRelationshipType;

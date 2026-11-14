@@ -38,6 +38,7 @@ export const FragmentDrawer: React.FC = () => {
     promoteFragmentToNote,
     createFragment,
     updateFragment,
+    flushFragmentSave,
     deleteFragment,
     toggleStarFragment,
     manualEmbedFragment,
@@ -133,14 +134,14 @@ export const FragmentDrawer: React.FC = () => {
   };
 
   useEffect(() => {
-    if (activeFragment) {
+    if (activeFragmentId && activeFragment) {
       setSelectedType(activeFragment.type);
       setTitle(activeFragment.title);
       setContent(activeFragment.content);
       setSource(activeFragment.source || '');
       setTagsList(activeFragment.tags || []);
       setTagInput('');
-    } else {
+    } else if (!activeFragmentId) {
       setSelectedType('thought');
       setTitle('');
       setContent('');
@@ -151,7 +152,10 @@ export const FragmentDrawer: React.FC = () => {
     setShowPromoteConfirm(false);
     setIsPromoting(false);
     setPromoteError(null);
-  }, [activeFragment, activeFragmentId, isFragmentDrawerOpen]);
+    // Intentionally depend on [activeFragmentId, isFragmentDrawerOpen] (not [activeFragment])
+    // so live typing or background sync updates never overwrite cursor / input state.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeFragmentId, isFragmentDrawerOpen]);
 
   if (!isFragmentDrawerOpen) return null;
 
@@ -220,6 +224,12 @@ export const FragmentDrawer: React.FC = () => {
     setSource(val);
     if (!isCreateMode && activeFragment) {
       updateFragment(activeFragment.id, { source: val.trim() || undefined });
+    }
+  };
+
+  const handleFieldBlur = () => {
+    if (!isCreateMode && activeFragment) {
+      flushFragmentSave(activeFragment.id);
     }
   };
 
@@ -441,6 +451,7 @@ export const FragmentDrawer: React.FC = () => {
               type="text"
               value={title}
               onChange={(e) => handleTitleChange(e.target.value)}
+              onBlur={handleFieldBlur}
               className="w-full font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388]/65 dark:placeholder:text-[#736C62] bg-transparent border-none focus:outline-none py-0.5"
               placeholder={isCreateMode ? 'Title or first line...' : 'Untitled Fragment...'}
             />
@@ -450,6 +461,7 @@ export const FragmentDrawer: React.FC = () => {
             <textarea
               value={content}
               onChange={(e) => handleContentChange(e.target.value)}
+              onBlur={handleFieldBlur}
               rows={7}
               className="w-full text-sm leading-relaxed py-1 px-0 bg-transparent border-none text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388]/65 dark:placeholder:text-[#736C62] focus:outline-none resize-y min-h-[140px] sm:min-h-[160px]"
               placeholder={
@@ -469,6 +481,7 @@ export const FragmentDrawer: React.FC = () => {
                 type="text"
                 value={source}
                 onChange={(e) => handleSourceChange(e.target.value)}
+                onBlur={handleFieldBlur}
                 placeholder="Source / context (e.g. Seneca Epistles, Buku, URL...)"
                 className="w-full text-xs pl-8 pr-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors"
               />

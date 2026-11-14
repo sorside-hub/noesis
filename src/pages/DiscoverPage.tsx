@@ -136,7 +136,11 @@ export const DiscoverPage: React.FC = () => {
             TAB 1: SYNTHESIS WORKSPACE
            ================================================================ */}
         <div className={activeTab === 'synthesis' ? 'block' : 'hidden'}>
-          <SynthesisWorkspace incomingSeed={synthesisSeed} />
+          <SynthesisWorkspace
+            incomingSeed={synthesisSeed}
+            vectorMap={vectorMap}
+            isLoadingVectors={isLoadingVectors}
+          />
         </div>
 
         {/* ================================================================
