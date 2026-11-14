@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useNoesis } from '../context/NoesisContext';
+import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 import {
   Download,
   RotateCcw,
@@ -21,6 +23,7 @@ import {
 import { SUPABASE_SQL_SCRIPT } from '../data/supabaseSchema';
 
 export const SettingsPage: React.FC = () => {
+  const scrollRef = useScrollRestoration<HTMLDivElement>('settings');
   const {
     notes,
     relics,
@@ -52,6 +55,9 @@ export const SettingsPage: React.FC = () => {
 
   // Supabase SQL Preview State
   const [showSqlPreview, setShowSqlPreview] = useState(false);
+
+  useBackOverlay(showPasswordForm, () => setShowPasswordForm(false), 'settings-password-form');
+  useBackOverlay(showSqlPreview, () => setShowSqlPreview(false), 'settings-sql-preview');
 
   const handleUpdatePassword = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -123,7 +129,7 @@ export const SettingsPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8">
       <div className="max-w-4xl mx-auto space-y-4 sm:space-y-8">
         {/* Minimal Clean Header */}
         <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-2.5 sm:pb-4">

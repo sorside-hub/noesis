@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useNoesis } from '../context/NoesisContext';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 import {
   DiscoverSourceItem,
   TopicClusterSummary,
@@ -16,14 +17,19 @@ import { Sparkles, GitBranch, Layers } from 'lucide-react';
 type DiscoverTab = 'synthesis' | 'connections' | 'clusters';
 
 export const DiscoverPage: React.FC = () => {
-  const { synthesisTargetNoteId } = useNoesis();
-  const [activeTab, setActiveTab] = useState<DiscoverTab>('synthesis');
+  const {
+    synthesisTargetNoteId,
+    discoverTab: activeTab,
+    setDiscoverTab: setActiveTab,
+  } = useNoesis();
+
+  const scrollRef = useScrollRestoration<HTMLDivElement>('discover:' + activeTab);
 
   useEffect(() => {
     if (synthesisTargetNoteId) {
       setActiveTab('synthesis');
     }
-  }, [synthesisTargetNoteId]);
+  }, [synthesisTargetNoteId, setActiveTab]);
 
   // Shared vector map for Connections & Topic Clusters
   const [vectorMap, setVectorMap] = useState<VectorMapResult | null>(null);
@@ -85,7 +91,7 @@ export const DiscoverPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8">
       <div className="max-w-5xl mx-auto space-y-4 sm:space-y-8">
         {/* Clean Header + 3-Section Switcher */}
         <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3 sm:pb-4 flex flex-col sm:flex-row sm:items-end justify-between gap-3 sm:gap-4">

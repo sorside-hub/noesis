@@ -40,6 +40,8 @@ import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { fetchAllVectorEmbeddings, VectorMapResult } from '../lib/supabase';
 import { computeRelatedNoteSuggestions } from '../lib/discoverAi';
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
+import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 
 interface TiptapEditorProps {
   isFullScreen?: boolean;
@@ -63,6 +65,9 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     openFragmentDrawer,
     setActiveNoteId,
     setActiveView,
+    navigateBack,
+    backTargetLabel,
+    exitDeletedNote,
     startUpdateSynthesis,
     createNote,
     manualEmbedNote,
@@ -70,6 +75,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     isCloudflareConnected,
     isSupabaseConnected,
   } = useNoesis();
+
+  const proseScrollRef = useScrollRestoration<HTMLDivElement>(
+    activeNote?.id ? `tiptap:${activeNote.id}` : null
+  );
 
   const [title, setTitle] = useState(activeNote?.title || '');
   const [isEmbeddingLoading, setIsEmbeddingLoading] = useState(false);
@@ -102,6 +111,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [showActionMenu, setShowActionMenu] = useState(false);
   const [showInspector, setShowInspector] = useState(false);
   const [showMobileInspector, setShowMobileInspector] = useState(false);
+  const [inspectorTab, setInspectorTab] = useState<'metadata' | 'related'>('metadata');
   const [showDeleteModal, setShowDeleteModal] = useState(false);
 
   // Inspector states
@@ -110,6 +120,13 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [searchRelatedQuery, setSearchRelatedQuery] = useState('');
   const [showLinkSearchDropdown, setShowLinkSearchDropdown] = useState(false);
   const [vectorMap, setVectorMap] = useState<VectorMapResult | null>(null);
+
+  useBackOverlay(showMobileInspector, () => setShowMobileInspector(false), 'tiptap-mobile-inspector');
+  useBackOverlay(showDeleteModal, () => setShowDeleteModal(false), 'tiptap-delete-modal');
+  useBackOverlay(showLinkDialog, () => setShowLinkDialog(false), 'tiptap-link-dialog');
+  useBackOverlay(showImageDialog, () => setShowImageDialog(false), 'tiptap-image-dialog');
+  useBackOverlay(showActionMenu, () => setShowActionMenu(false), 'tiptap-action-menu');
+  useBackOverlay(showLinkSearchDropdown, () => setShowLinkSearchDropdown(false), 'tiptap-link-related-dropdown');
 
   // Lazy-load stored vector map when opening Link Note dropdown so Saran Terkait can use BGE-M3 vectors
   useEffect(() => {
@@ -121,12 +138,15 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       .catch(console.warn);
   }, [showLinkSearchDropdown, vectorMap, isSupabaseConnected]);
 
-  // Sync title and source when activeNote changes
+  // Sync title, source, and reset inspector tab back to Metadata when switching notes
   useEffect(() => {
     if (activeNote) {
       setTitle(activeNote.title);
       setSourceInput(activeNote.source || '');
     }
+    setInspectorTab('metadata');
+    setShowLinkSearchDropdown(false);
+    setSearchRelatedQuery('');
   }, [activeNote?.id]);
 
   const editor = useEditor({
@@ -386,21 +406,16 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       {/* Main Center Canvas */}
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         {/* Top Header Bar */}
-        <div className="flex items-center justify-between px-4 sm:px-6 pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/90 dark:bg-[#151413]/90 backdrop-blur-sm z-10 shrink-0">
+        <div className="flex items-center justify-between px-3 sm:px-6 pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/90 dark:bg-[#151413]/90 backdrop-blur-sm z-10 shrink-0">
           {/* Left: Library Back Navigation & Note Type */}
           <div className="flex items-center gap-2 text-xs truncate">
             <button
-              onClick={() => {
-                if (activeNote) {
-                  discardNoteIfEmpty(activeNote.id);
-                }
-                setActiveView('library');
-              }}
+              onClick={() => navigateBack()}
               className="flex items-center gap-1 font-medium text-[#9A3412] dark:text-[#EA580C] hover:underline"
-              title="Return to Library"
+              title={`Return to ${backTargetLabel}`}
             >
               <ChevronLeft size={16} />
-              <span>Library</span>
+              <span>{backTargetLabel}</span>
             </button>
 
             <span className="text-[#9C9388]">/</span>
@@ -833,733 +848,812 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           </div>
         )}
 
-        {/* Prose Editor Scrollable Area - Ultra Clean Canvas without Bottom Bar */}
-        <div className="flex-1 overflow-y-auto px-6 sm:px-12 md:px-16 lg:px-24 py-6 sm:py-8 max-w-4xl mx-auto w-full">
+        {/* Prose Editor Scrollable Area - Compact on mobile (px-3), generous on desktop */}
+        <div ref={proseScrollRef} className="flex-1 overflow-y-auto px-3 sm:px-10 md:px-16 lg:px-24 py-3 sm:py-8 max-w-4xl mx-auto w-full">
           {/* Title Input */}
-          <div className="mb-4">
+          <div className="mb-2 sm:mb-4">
             <input
               type="text"
               value={title}
               onChange={handleTitleChange}
               placeholder="Untitled Note"
-              className="w-full font-serif text-3xl sm:text-4xl lg:text-5xl font-medium tracking-tight bg-transparent text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none placeholder:text-[#9C9388]/60 dark:placeholder:text-[#736C62]/60 border-none p-0"
+              className="w-full font-serif text-2xl sm:text-4xl lg:text-5xl font-medium tracking-tight bg-transparent text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none placeholder:text-[#9C9388]/60 dark:placeholder:text-[#736C62]/60 border-none p-0"
             />
           </div>
 
-          <div className="h-px w-full bg-[#E8E2D8] dark:bg-[#2F2B28] my-6" />
+          <div className="h-px w-full bg-[#E8E2D8] dark:bg-[#2F2B28] my-3 sm:my-6" />
 
           {/* Tiptap Canvas */}
           <EditorContent editor={editor} className="cursor-text pb-24" />
         </div>
       </div>
 
-      {/* Desktop Collapsible Inspector Panel (Metadata: Note type, source, tags, related note, statistic note) */}
+      {/* Desktop Collapsible Inspector Panel (2 Centered Tabs: Metadata & Related) */}
       {showInspector && (
-        <aside className="hidden md:flex w-80 border-l border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/85 dark:bg-[#1A1817]/85 flex-col h-full shrink-0 select-none overflow-y-auto animate-in slide-in-from-right duration-200">
-          {/* Drawer Header */}
-          <div className="p-4 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <Sliders size={15} className="text-[#9A3412] dark:text-[#EA580C]" />
-              <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Metadata
-              </h3>
+        <aside className="hidden md:flex w-80 border-l border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/85 dark:bg-[#1A1817]/85 flex-col h-full shrink-0 select-none overflow-hidden animate-in slide-in-from-right duration-200">
+          {/* Drawer Header with Centered 2-Tab Switcher */}
+          <div className="px-3 py-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] grid grid-cols-[28px_1fr_28px] items-center shrink-0">
+            <div aria-hidden="true" />
+            <div className="flex justify-center">
+              <div className="inline-flex items-center p-1 bg-[#E8E2D8]/60 dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('metadata')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                    inspectorTab === 'metadata'
+                      ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                  }`}
+                >
+                  Metadata
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('related')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                    inspectorTab === 'related'
+                      ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                      : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                  }`}
+                >
+                  Related ({relatedNotes.length + relatedFragments.length})
+                </button>
+              </div>
             </div>
             <button
+              type="button"
               onClick={() => setShowInspector(false)}
-              className="p-1 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]"
+              className="p-1 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] justify-self-end"
+              title="Close inspector"
             >
               <PanelRightClose size={16} />
             </button>
           </div>
 
-          {/* Drawer Content: Strictly 5 Sections */}
-          <div className="p-5 space-y-6">
-            {/* 1. Note Type */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
-                Note Type
-              </label>
-              {activeNote.type === 'synthesis' ? (
-                <div className="space-y-2">
-                  <div className="p-2.5 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/50 flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
-                      <Sparkles size={12} />
-                      <span>Synthesis</span>
-                    </span>
-                    <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
-                      Otomatis dari Discover
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => startUpdateSynthesis(activeNote.id)}
-                    className="w-full py-2 px-3 rounded-xl bg-[#6D28D9] dark:bg-[#7C3AED] text-white text-xs font-medium hover:bg-[#5B21B6] dark:hover:bg-[#6D28D9] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
-                  >
-                    <Sparkles size={13} />
-                    <span>Perbarui dengan Materi Baru</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-1.5 p-1 bg-white dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
-                  {(['thought', 'reference', 'idea'] as ManualNoteType[]).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => handleTypeChange(t)}
-                      className={`py-1.5 px-2 text-xs font-mono uppercase tracking-wider rounded-lg transition-colors ${
-                        activeNote.type === t
-                          ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413] shadow-xs'
-                          : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2]'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* 2. Source / Provenance */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
-                Source
-              </label>
-              <input
-                type="text"
-                value={sourceInput}
-                onChange={(e) => setSourceInput(e.target.value)}
-                onBlur={handleSaveSource}
-                placeholder="e.g. Seneca, Epistulae Morales or Book URL"
-                className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-              />
-            </div>
-
-            {/* 3. Tags Manager */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
-                Tags
-              </label>
-              <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                {activeNote.tags.length === 0 ? (
-                  <span className="text-xs text-[#9C9388] italic">No tags assigned</span>
-                ) : (
-                  activeNote.tags.map((tag) => (
-                    <span
-                      key={tag}
-                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]"
-                    >
-                      <span>#{tag}</span>
-                      <button
-                        onClick={() => handleRemoveTag(tag)}
-                        className="hover:text-red-500 font-bold ml-0.5"
-                      >
-                        ×
-                      </button>
-                    </span>
-                  ))
-                )}
-              </div>
-
-              <form onSubmit={handleAddTag} className="flex gap-1.5">
-                <input
-                  type="text"
-                  value={newTagInput}
-                  onChange={(e) => setNewTagInput(e.target.value)}
-                  placeholder="Add new tag..."
-                  className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-                />
-                <button
-                  type="submit"
-                  className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs hover:bg-[#78280E]"
-                >
-                  <Plus size={13} />
-                </button>
-              </form>
-            </div>
-
-            {/* 4. Related Note & Connected Fragments */}
-            <div className="space-y-3 pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28]">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
-                  Related Note ({relatedNotes.length + relatedFragments.length})
-                </label>
-                <button
-                  onClick={() => setShowLinkSearchDropdown((prev) => !prev)}
-                  className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
-                >
-                  <Plus size={12} />
-                  <span>Link Note</span>
-                </button>
-              </div>
-
-              {showLinkSearchDropdown && (
-                <div className="p-2.5 bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-md space-y-2">
-                  <input
-                    type="text"
-                    value={searchRelatedQuery}
-                    onChange={(e) => setSearchRelatedQuery(e.target.value)}
-                    placeholder="Search note to link..."
-                    className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-                    autoFocus
-                  />
-
-                  {/* Optional Click-to-Link Suggestions */}
-                  {!searchRelatedQuery.trim() && suggestedRelatedNotes.length > 0 && (
-                    <div className="space-y-1 pb-1.5 border-b border-[#E8E2D8] dark:border-[#2F2B28]">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] flex items-center gap-1 px-1">
-                        <Sparkles size={10} />
-                        <span>Saran Terkait</span>
+          {/* Drawer Content */}
+          <div className="flex-1 overflow-y-auto p-5">
+            {inspectorTab === 'metadata' ? (
+              <div className="space-y-6">
+                {/* 1. Note Type */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
+                    Note Type
+                  </label>
+                  {activeNote.type === 'synthesis' ? (
+                    <div className="space-y-2">
+                      <div className="p-2.5 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/50 flex items-center justify-between gap-2">
+                        <span className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
+                          <Sparkles size={12} />
+                          <span>Synthesis</span>
+                        </span>
+                        <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
+                          Otomatis dari Discover
+                        </span>
                       </div>
-                      {suggestedRelatedNotes.map(({ note: noteItem, reason }) => (
-                        <div
-                          key={`sug-${noteItem.id}`}
-                          onClick={() => {
-                            linkRelatedNote(activeNote.id, noteItem.id);
-                            setShowLinkSearchDropdown(false);
-                            setSearchRelatedQuery('');
-                          }}
-                          className="p-1.5 rounded-lg bg-[#FAF7F2] dark:bg-[#151413] hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between gap-2"
+                      <button
+                        type="button"
+                        onClick={() => startUpdateSynthesis(activeNote.id)}
+                        className="w-full py-2 px-3 rounded-xl bg-[#6D28D9] dark:bg-[#7C3AED] text-white text-xs font-medium hover:bg-[#5B21B6] dark:hover:bg-[#6D28D9] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                      >
+                        <Sparkles size={13} />
+                        <span>Perbarui dengan Materi Baru</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-3 gap-1.5 p-1 bg-white dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                      {(['thought', 'reference', 'idea'] as ManualNoteType[]).map((t) => (
+                        <button
+                          key={t}
+                          onClick={() => handleTypeChange(t)}
+                          className={`py-1.5 px-2 text-xs font-mono uppercase tracking-wider rounded-lg transition-colors ${
+                            activeNote.type === t
+                              ? 'bg-[#221F1D] text-white dark:bg-[#EDE8E1] dark:text-[#151413] shadow-xs'
+                              : 'text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2]'
+                          }`}
                         >
-                          <span className="font-serif truncate text-[#221F1D] dark:text-[#EDE8E1]">
-                            {noteItem.title || 'Untitled Note'}
-                          </span>
-                          <span className="text-[9px] font-mono text-[#9C9388] shrink-0">
-                            {reason === 'vector' ? 'Mirip makna' : 'Mirip konsep'}
-                          </span>
-                        </div>
+                          {t}
+                        </button>
                       ))}
                     </div>
                   )}
+                </div>
 
-                  <div className="max-h-36 overflow-y-auto space-y-1">
-                    {filteredUnlinkedNotes.length === 0 ? (
-                      <p className="text-[11px] text-[#9C9388] p-1.5 italic">No matching notes</p>
+                {/* 2. Source / Provenance */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
+                    Source
+                  </label>
+                  <input
+                    type="text"
+                    value={sourceInput}
+                    onChange={(e) => setSourceInput(e.target.value)}
+                    onBlur={handleSaveSource}
+                    placeholder="e.g. Seneca, Epistulae Morales or Book URL"
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                  />
+                </div>
+
+                {/* 3. Tags Manager */}
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
+                    Tags
+                  </label>
+                  <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                    {activeNote.tags.length === 0 ? (
+                      <span className="text-xs text-[#9C9388] italic">No tags assigned</span>
                     ) : (
-                      filteredUnlinkedNotes.map((noteItem) => (
-                        <div
-                          key={noteItem.id}
-                          onClick={() => {
-                            linkRelatedNote(activeNote.id, noteItem.id);
-                            setShowLinkSearchDropdown(false);
-                            setSearchRelatedQuery('');
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between gap-2"
+                      activeNote.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]"
                         >
-                          <span className="font-serif truncate">{noteItem.title || 'Untitled Note'}</span>
-                          <span className="text-[10px] font-mono text-[#9C9388] uppercase shrink-0">
-                            {noteItem.type}
-                          </span>
-                        </div>
+                          <span>#{tag}</span>
+                          <button
+                            onClick={() => handleRemoveTag(tag)}
+                            className="hover:text-red-500 font-bold ml-0.5"
+                          >
+                            ×
+                          </button>
+                        </span>
                       ))
                     )}
                   </div>
+
+                  <form onSubmit={handleAddTag} className="flex gap-1.5">
+                    <input
+                      type="text"
+                      value={newTagInput}
+                      onChange={(e) => setNewTagInput(e.target.value)}
+                      placeholder="Add new tag..."
+                      className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                    />
+                    <button
+                      type="submit"
+                      className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs hover:bg-[#78280E]"
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </form>
                 </div>
-              )}
 
-              <div className="space-y-2">
-                {relatedNotes.length === 0 && relatedFragments.length === 0 ? (
-                  <p className="text-xs text-[#9C9388] italic p-2 bg-white/50 dark:bg-[#221F1E]/50 rounded-xl border border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 text-center">
-                    No related note linked.
-                  </p>
-                ) : (
-                  <>
-                    {relatedNotes.map((item) => (
-                      <div
-                        key={item.id}
-                        className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
-                      >
-                        <div
-                          onClick={() => setActiveNoteId(item.id)}
-                          className="cursor-pointer flex-1 truncate"
-                          title="Jump to note"
-                        >
-                          <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
-                            {item.title}
-                          </h5>
-                          <span className="text-[10px] font-mono text-[#9C9388] uppercase">
-                            {item.type}
+                {/* 4. Semantic Embedding (bge-m3) */}
+                <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
+                      <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
+                      <span>Embedding (bge-m3)</span>
+                    </label>
+                    <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
+                  </div>
+
+                  {/* Status Badge */}
+                  <div className="flex items-center justify-between pt-0.5">
+                    <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
+                    {(() => {
+                      if (!activeNote.embeddedAt) {
+                        return (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
+                            Not Embedded
                           </span>
-                        </div>
-
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => setActiveNoteId(item.id)}
-                            className="p-1 text-[#9C9388] hover:text-[#9A3412]"
-                            title="Open Note"
-                          >
-                            <ArrowUpRight size={13} />
-                          </button>
-                          <button
-                            onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
-                            className="p-1 text-[#9C9388] hover:text-red-600"
-                            title="Unlink note"
-                          >
-                            <X size={13} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-
-                    {relatedFragments.map((frag) => (
-                      <div
-                        key={frag.id}
-                        className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
-                      >
-                        <div
-                          onClick={() => openFragmentDrawer(frag.id)}
-                          className="cursor-pointer flex-1 truncate"
-                          title="Open fragment"
-                        >
-                          <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
-                            {frag.title}
-                          </h5>
-                          <span className="text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] uppercase">
-                            Fragment · {frag.type}
+                        );
+                      }
+                      const isOutdated =
+                        new Date(activeNote.updatedAt).getTime() -
+                          new Date(activeNote.embeddedAt).getTime() >
+                        3000;
+                      if (isOutdated) {
+                        return (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/40">
+                            Needs Update
                           </span>
-                        </div>
+                        );
+                      }
+                      return (
+                        <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/40">
+                          Synced & Embedded
+                        </span>
+                      );
+                    })()}
+                  </div>
 
-                        <div className="flex items-center gap-1 shrink-0">
-                          <button
-                            onClick={() => openFragmentDrawer(frag.id)}
-                            className="p-1 text-[#9C9388] hover:text-[#9A3412]"
-                            title="Open Fragment"
-                          >
-                            <ArrowUpRight size={13} />
-                          </button>
-                          <button
-                            onClick={() => unlinkDiscoverConnection(activeNote.id, frag.id)}
-                            className="p-1 text-[#9C9388] hover:text-red-600"
-                            title="Unlink fragment"
-                          >
-                            <X size={13} />
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </>
-                )}
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      type="button"
+                      onClick={handleTriggerEmbed}
+                      disabled={isEmbeddingLoading}
+                      className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                    >
+                      <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                      <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
+                    </button>
+
+                    {activeNote.embeddedAt && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveEmbed}
+                        disabled={isEmbeddingLoading}
+                        className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                        title="Hapus vector embedding"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    )}
+                  </div>
+
+                  {embedNotice && (
+                    <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                      {embedNotice}
+                    </p>
+                  )}
+                </div>
+
+                {/* 5. Timestamps (Created & Updated) */}
+                <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+                  <span>Created {formatDate(activeNote.createdAt)}</span>
+                  <span>·</span>
+                  <span>Updated {formatDate(activeNote.updatedAt)}</span>
+                </div>
               </div>
-            </div>
-
-            {/* 6. Semantic Embedding (bge-m3) */}
-            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
-                  <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
-                  <span>Embedding (bge-m3)</span>
-                </label>
-                <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
-              </div>
-
-              {/* Status Badge */}
-              <div className="flex items-center justify-between pt-0.5">
-                <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
-                {(() => {
-                  if (!activeNote.embeddedAt) {
-                    return (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
-                        Not Embedded
-                      </span>
-                    );
-                  }
-                  const isOutdated =
-                    new Date(activeNote.updatedAt).getTime() -
-                      new Date(activeNote.embeddedAt).getTime() >
-                    3000;
-                  if (isOutdated) {
-                    return (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/40">
-                        Needs Update
-                      </span>
-                    );
-                  }
-                  return (
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/40">
-                      Synced & Embedded
-                    </span>
-                  );
-                })()}
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleTriggerEmbed}
-                  disabled={isEmbeddingLoading}
-                  className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
-                >
-                  <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                  <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
-                </button>
-
-                {activeNote.embeddedAt && (
+            ) : (
+              /* TAB 2: RELATED (Single combined list of Notes & Fragments) */
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
+                    Related ({relatedNotes.length + relatedFragments.length})
+                  </label>
                   <button
                     type="button"
-                    onClick={handleRemoveEmbed}
-                    disabled={isEmbeddingLoading}
-                    className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
-                    title="Hapus vector embedding"
+                    onClick={() => setShowLinkSearchDropdown((prev) => !prev)}
+                    className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
                   >
-                    <Trash2 size={13} />
+                    <Plus size={12} />
+                    <span>Link Note</span>
                   </button>
+                </div>
+
+                {showLinkSearchDropdown && (
+                  <div className="p-2.5 bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-md space-y-2">
+                    <input
+                      type="text"
+                      value={searchRelatedQuery}
+                      onChange={(e) => setSearchRelatedQuery(e.target.value)}
+                      placeholder="Search note to link..."
+                      className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                      autoFocus
+                    />
+
+                    {/* Optional Click-to-Link Suggestions */}
+                    {!searchRelatedQuery.trim() && suggestedRelatedNotes.length > 0 && (
+                      <div className="space-y-1 pb-1.5 border-b border-[#E8E2D8] dark:border-[#2F2B28]">
+                        <div className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] flex items-center gap-1 px-1">
+                          <Sparkles size={10} />
+                          <span>Saran Terkait</span>
+                        </div>
+                        {suggestedRelatedNotes.map(({ note: noteItem, reason }) => (
+                          <div
+                            key={`sug-${noteItem.id}`}
+                            onClick={() => {
+                              linkRelatedNote(activeNote.id, noteItem.id);
+                              setShowLinkSearchDropdown(false);
+                              setSearchRelatedQuery('');
+                            }}
+                            className="p-1.5 rounded-lg bg-[#FAF7F2] dark:bg-[#151413] hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between gap-2"
+                          >
+                            <span className="font-serif truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                              {noteItem.title || 'Untitled Note'}
+                            </span>
+                            <span className="text-[9px] font-mono text-[#9C9388] shrink-0">
+                              {reason === 'vector' ? 'Mirip makna' : 'Mirip konsep'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="max-h-40 overflow-y-auto space-y-1">
+                      {filteredUnlinkedNotes.length === 0 ? (
+                        <p className="text-[11px] text-[#9C9388] p-1.5 italic">No matching notes</p>
+                      ) : (
+                        filteredUnlinkedNotes.map((noteItem) => (
+                          <div
+                            key={noteItem.id}
+                            onClick={() => {
+                              linkRelatedNote(activeNote.id, noteItem.id);
+                              setShowLinkSearchDropdown(false);
+                              setSearchRelatedQuery('');
+                            }}
+                            className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] cursor-pointer text-xs flex items-center justify-between gap-2"
+                          >
+                            <span className="font-serif truncate">{noteItem.title || 'Untitled Note'}</span>
+                            <span className="text-[10px] font-mono text-[#9C9388] uppercase shrink-0">
+                              {noteItem.type}
+                            </span>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
                 )}
+
+                <div className="space-y-2">
+                  {relatedNotes.length === 0 && relatedFragments.length === 0 ? (
+                    <p className="text-xs text-[#9C9388] italic p-3 bg-white/50 dark:bg-[#221F1E]/50 rounded-xl border border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 text-center">
+                      Belum ada catatan atau fragment terkait.
+                    </p>
+                  ) : (
+                    <>
+                      {relatedNotes.map((item) => (
+                        <div
+                          key={item.id}
+                          className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
+                        >
+                          <div
+                            onClick={() => setActiveNoteId(item.id)}
+                            className="cursor-pointer flex-1 truncate"
+                            title="Jump to note"
+                          >
+                            <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                              {item.title}
+                            </h5>
+                            <span className="text-[10px] font-mono text-[#9C9388] uppercase">
+                              {item.type}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => setActiveNoteId(item.id)}
+                              className="p-1 text-[#9C9388] hover:text-[#9A3412]"
+                              title="Open Note"
+                            >
+                              <ArrowUpRight size={13} />
+                            </button>
+                            <button
+                              onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
+                              className="p-1 text-[#9C9388] hover:text-red-600"
+                              title="Unlink note"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+
+                      {relatedFragments.map((frag) => (
+                        <div
+                          key={frag.id}
+                          className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
+                        >
+                          <div
+                            onClick={() => openFragmentDrawer(frag.id)}
+                            className="cursor-pointer flex-1 truncate"
+                            title="Open fragment"
+                          >
+                            <h5 className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                              {frag.title}
+                            </h5>
+                            <span className="text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] uppercase">
+                              Fragment · {frag.type}
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 shrink-0">
+                            <button
+                              onClick={() => openFragmentDrawer(frag.id)}
+                              className="p-1 text-[#9C9388] hover:text-[#9A3412]"
+                              title="Open Fragment"
+                            >
+                              <ArrowUpRight size={13} />
+                            </button>
+                            <button
+                              onClick={() => unlinkDiscoverConnection(activeNote.id, frag.id)}
+                              className="p-1 text-[#9C9388] hover:text-red-600"
+                              title="Unlink fragment"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
               </div>
-
-              {embedNotice && (
-                <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
-                  {embedNotice}
-                </p>
-              )}
-            </div>
-
-            {/* 7. Timestamps (Created & Updated) */}
-            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
-              <span>Created {formatDate(activeNote.createdAt)}</span>
-              <span>·</span>
-              <span>Updated {formatDate(activeNote.updatedAt)}</span>
-            </div>
+            )}
           </div>
         </aside>
       )}
 
       {/* Mobile Drawer Metadata (Bottom Sheet Modal) */}
       {showMobileInspector && (
-        <div className="md:hidden fixed inset-0 z-50 flex flex-col justify-end bg-black/40 backdrop-blur-xs">
-          <div className="bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t border-[#E8E2D8] dark:border-[#2F2B28] rounded-t-2xl p-5 space-y-4 max-h-[85vh] overflow-y-auto animate-in slide-in-from-bottom duration-200">
-            <div className="flex items-center justify-between border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3">
-              <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Metadata
-              </h3>
+        <div
+          onClick={() => setShowMobileInspector(false)}
+          className="md:hidden fixed inset-0 z-50 flex flex-col justify-end bg-black/40 backdrop-blur-xs"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t border-[#E8E2D8] dark:border-[#2F2B28] rounded-t-2xl h-[78vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-200"
+          >
+            {/* Fixed Header with Centered 2-Tab Switcher */}
+            <div className="px-3.5 sm:px-4 py-2.5 sm:py-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] grid grid-cols-[32px_1fr_32px] items-center shrink-0">
+              <div aria-hidden="true" />
+              <div className="flex justify-center">
+                <div className="inline-flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                  <button
+                    type="button"
+                    onClick={() => setInspectorTab('metadata')}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                      inspectorTab === 'metadata'
+                        ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                        : 'text-[#6B635B] dark:text-[#A8A196]'
+                    }`}
+                  >
+                    Metadata
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setInspectorTab('related')}
+                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                      inspectorTab === 'related'
+                        ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                        : 'text-[#6B635B] dark:text-[#A8A196]'
+                    }`}
+                  >
+                    Related ({relatedNotes.length + relatedFragments.length})
+                  </button>
+                </div>
+              </div>
               <button
+                type="button"
                 onClick={() => setShowMobileInspector(false)}
-                className="p-1 text-[#9C9388]"
+                className="p-1 text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] justify-self-end"
+                aria-label="Close drawer"
               >
                 <X size={18} />
               </button>
             </div>
 
-            {/* 1. Note Type */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
-                Note Type
-              </label>
-              {activeNote.type === 'synthesis' ? (
-                <div className="space-y-2">
-                  <div className="p-2.5 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/50 flex items-center justify-between gap-2">
-                    <span className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
-                      <Sparkles size={12} />
-                      <span>Synthesis</span>
-                    </span>
-                    <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
-                      Otomatis dari Discover
-                    </span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowMobileInspector(false);
-                      startUpdateSynthesis(activeNote.id);
-                    }}
-                    className="w-full py-2.5 px-3 rounded-xl bg-[#6D28D9] dark:bg-[#7C3AED] text-white text-xs font-medium hover:bg-[#5B21B6] dark:hover:bg-[#6D28D9] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
-                  >
-                    <Sparkles size={13} />
-                    <span>Perbarui dengan Materi Baru</span>
-                  </button>
-                </div>
-              ) : (
-                <div className="grid grid-cols-3 gap-2">
-                  {(['thought', 'reference', 'idea'] as ManualNoteType[]).map((t) => (
-                    <button
-                      key={t}
-                      onClick={() => handleTypeChange(t)}
-                      className={`py-2 text-xs font-mono uppercase tracking-wider rounded-xl border text-center ${
-                        activeNote.type === t
-                          ? 'border-[#9A3412] bg-[#9A3412] text-white'
-                          : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]'
-                      }`}
-                    >
-                      {t}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* 2. Source */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
-                Source
-              </label>
-              <input
-                type="text"
-                value={sourceInput}
-                onChange={(e) => setSourceInput(e.target.value)}
-                onBlur={handleSaveSource}
-                placeholder="Author, title, or citation"
-                className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1]"
-              />
-            </div>
-
-            {/* 3. Tags */}
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
-                Tags
-              </label>
-              <div className="flex flex-wrap items-center gap-1.5 mb-2">
-                {activeNote.tags.map((tag) => (
-                  <span
-                    key={tag}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28]"
-                  >
-                    <span>#{tag}</span>
-                    <button onClick={() => handleRemoveTag(tag)} className="text-red-500 font-bold ml-0.5">
-                      ×
-                    </button>
-                  </span>
-                ))}
-              </div>
-              <form onSubmit={handleAddTag} className="flex gap-1.5">
-                <input
-                  type="text"
-                  value={newTagInput}
-                  onChange={(e) => setNewTagInput(e.target.value)}
-                  placeholder="New tag..."
-                  className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]"
-                />
-                <button
-                  type="submit"
-                  className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs"
-                >
-                  <Plus size={13} />
-                </button>
-              </form>
-            </div>
-
-            {/* 4. Related Note & Connected Fragments */}
-            <div className="space-y-2.5 pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28]">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388]">
-                  Related Note ({relatedNotes.length + relatedFragments.length})
-                </label>
-                <button
-                  type="button"
-                  onClick={() => setShowLinkSearchDropdown((prev) => !prev)}
-                  className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
-                >
-                  <Plus size={12} />
-                  <span>Link Note</span>
-                </button>
-              </div>
-
-              {showLinkSearchDropdown && (
-                <div className="p-2.5 bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl space-y-2">
-                  <input
-                    type="text"
-                    value={searchRelatedQuery}
-                    onChange={(e) => setSearchRelatedQuery(e.target.value)}
-                    placeholder="Search note to link..."
-                    className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-                  />
-
-                  {!searchRelatedQuery.trim() && suggestedRelatedNotes.length > 0 && (
-                    <div className="space-y-1 pb-1.5 border-b border-[#E8E2D8] dark:border-[#2F2B28]">
-                      <div className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] flex items-center gap-1 px-1">
-                        <Sparkles size={10} />
-                        <span>Saran Terkait</span>
-                      </div>
-                      {suggestedRelatedNotes.map(({ note: noteItem, reason }) => (
-                        <div
-                          key={`m-sug-${noteItem.id}`}
-                          onClick={() => {
-                            linkRelatedNote(activeNote.id, noteItem.id);
-                            setShowLinkSearchDropdown(false);
-                            setSearchRelatedQuery('');
-                          }}
-                          className="p-1.5 rounded-lg bg-[#FAF7F2] dark:bg-[#151413] text-xs flex items-center justify-between gap-2"
-                        >
-                          <span className="font-serif truncate text-[#221F1D] dark:text-[#EDE8E1]">
-                            {noteItem.title || 'Untitled Note'}
+            {/* Scrollable Tab Content */}
+            <div className="flex-1 overflow-y-auto px-3.5 sm:px-5 py-3 sm:py-4">
+              {inspectorTab === 'metadata' ? (
+                <div className="space-y-4">
+                  {/* 1. Note Type */}
+                  <div>
+                    <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
+                      Note Type
+                    </label>
+                    {activeNote.type === 'synthesis' ? (
+                      <div className="space-y-2">
+                        <div className="p-2.5 rounded-xl bg-violet-50/70 dark:bg-violet-950/30 border border-violet-200 dark:border-violet-900/50 flex items-center justify-between gap-2">
+                          <span className="inline-flex items-center gap-1.5 text-xs font-mono uppercase tracking-wider font-semibold text-[#6D28D9] dark:text-[#A78BFA]">
+                            <Sparkles size={12} />
+                            <span>Synthesis</span>
                           </span>
-                          <span className="text-[9px] font-mono text-[#9C9388] shrink-0">
-                            {reason === 'vector' ? 'Mirip makna' : 'Mirip konsep'}
+                          <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
+                            Otomatis dari Discover
                           </span>
                         </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowMobileInspector(false);
+                            startUpdateSynthesis(activeNote.id);
+                          }}
+                          className="w-full py-2.5 px-3 rounded-xl bg-[#6D28D9] dark:bg-[#7C3AED] text-white text-xs font-medium hover:bg-[#5B21B6] dark:hover:bg-[#6D28D9] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                        >
+                          <Sparkles size={13} />
+                          <span>Perbarui dengan Materi Baru</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="grid grid-cols-3 gap-2">
+                        {(['thought', 'reference', 'idea'] as ManualNoteType[]).map((t) => (
+                          <button
+                            key={t}
+                            onClick={() => handleTypeChange(t)}
+                            className={`py-2 text-xs font-mono uppercase tracking-wider rounded-xl border text-center ${
+                              activeNote.type === t
+                                ? 'border-[#9A3412] bg-[#9A3412] text-white'
+                                : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]'
+                            }`}
+                          >
+                            {t}
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {/* 2. Source */}
+                  <div>
+                    <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
+                      Source
+                    </label>
+                    <input
+                      type="text"
+                      value={sourceInput}
+                      onChange={(e) => setSourceInput(e.target.value)}
+                      onBlur={handleSaveSource}
+                      placeholder="Author, title, or citation"
+                      className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1]"
+                    />
+                  </div>
+
+                  {/* 3. Tags */}
+                  <div>
+                    <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
+                      Tags
+                    </label>
+                    <div className="flex flex-wrap items-center gap-1.5 mb-2">
+                      {activeNote.tags.map((tag) => (
+                        <span
+                          key={tag}
+                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-mono bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28]"
+                        >
+                          <span>#{tag}</span>
+                          <button onClick={() => handleRemoveTag(tag)} className="text-red-500 font-bold ml-0.5">
+                            ×
+                          </button>
+                        </span>
                       ))}
+                    </div>
+                    <form onSubmit={handleAddTag} className="flex gap-1.5">
+                      <input
+                        type="text"
+                        value={newTagInput}
+                        onChange={(e) => setNewTagInput(e.target.value)}
+                        placeholder="New tag..."
+                        className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]"
+                      />
+                      <button
+                        type="submit"
+                        className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs"
+                      >
+                        <Plus size={13} />
+                      </button>
+                    </form>
+                  </div>
+
+                  {/* 4. Semantic Embedding (bge-m3) */}
+                  <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
+                        <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
+                        <span>Embedding (bge-m3)</span>
+                      </label>
+                      <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
+                    </div>
+
+                    {/* Status Badge */}
+                    <div className="flex items-center justify-between pt-0.5">
+                      <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
+                      {(() => {
+                        if (!activeNote.embeddedAt) {
+                          return (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
+                              Not Embedded
+                            </span>
+                          );
+                        }
+                        const isOutdated =
+                          new Date(activeNote.updatedAt).getTime() -
+                            new Date(activeNote.embeddedAt).getTime() >
+                          3000;
+                        if (isOutdated) {
+                          return (
+                            <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/40">
+                              Needs Update
+                            </span>
+                          );
+                        }
+                        return (
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/40">
+                            Synced & Embedded
+                          </span>
+                        );
+                      })()}
+                    </div>
+
+                    <div className="flex items-center gap-2 pt-1">
+                      <button
+                        type="button"
+                        onClick={handleTriggerEmbed}
+                        disabled={isEmbeddingLoading}
+                        className="flex-1 py-2 px-3 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                      >
+                        <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                        <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
+                      </button>
+
+                      {activeNote.embeddedAt && (
+                        <button
+                          type="button"
+                          onClick={handleRemoveEmbed}
+                          disabled={isEmbeddingLoading}
+                          className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                          title="Hapus vector embedding"
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+
+                    {embedNotice && (
+                      <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
+                        {embedNotice}
+                      </p>
+                    )}
+                  </div>
+
+                  {/* 5. Timestamps (Created & Updated) */}
+                  <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+                    <span>Created {formatDate(activeNote.createdAt)}</span>
+                    <span>·</span>
+                    <span>Updated {formatDate(activeNote.updatedAt)}</span>
+                  </div>
+                </div>
+              ) : (
+                /* TAB 2: RELATED (Single combined list with full drawer scroll space) */
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between">
+                    <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388]">
+                      Related ({relatedNotes.length + relatedFragments.length})
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setShowLinkSearchDropdown((prev) => !prev)}
+                      className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
+                    >
+                      <Plus size={12} />
+                      <span>Link Note</span>
+                    </button>
+                  </div>
+
+                  {showLinkSearchDropdown && (
+                    <div className="p-2.5 bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl space-y-2">
+                      <input
+                        type="text"
+                        value={searchRelatedQuery}
+                        onChange={(e) => setSearchRelatedQuery(e.target.value)}
+                        placeholder="Search note to link..."
+                        className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#332F2C] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                      />
+
+                      {!searchRelatedQuery.trim() && suggestedRelatedNotes.length > 0 && (
+                        <div className="space-y-1 pb-1.5 border-b border-[#E8E2D8] dark:border-[#2F2B28]">
+                          <div className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] flex items-center gap-1 px-1">
+                            <Sparkles size={10} />
+                            <span>Saran Terkait</span>
+                          </div>
+                          {suggestedRelatedNotes.map(({ note: noteItem, reason }) => (
+                            <div
+                              key={`m-sug-${noteItem.id}`}
+                              onClick={() => {
+                                linkRelatedNote(activeNote.id, noteItem.id);
+                                setShowLinkSearchDropdown(false);
+                                setSearchRelatedQuery('');
+                              }}
+                              className="p-1.5 rounded-lg bg-[#FAF7F2] dark:bg-[#151413] text-xs flex items-center justify-between gap-2"
+                            >
+                              <span className="font-serif truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                                {noteItem.title || 'Untitled Note'}
+                              </span>
+                              <span className="text-[9px] font-mono text-[#9C9388] shrink-0">
+                                {reason === 'vector' ? 'Mirip makna' : 'Mirip konsep'}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      <div className="max-h-40 overflow-y-auto space-y-1">
+                        {filteredUnlinkedNotes.length === 0 ? (
+                          <p className="text-[11px] text-[#9C9388] p-1.5 italic">No matching notes</p>
+                        ) : (
+                          filteredUnlinkedNotes.map((noteItem) => (
+                            <div
+                              key={`m-opt-${noteItem.id}`}
+                              onClick={() => {
+                                linkRelatedNote(activeNote.id, noteItem.id);
+                                setShowLinkSearchDropdown(false);
+                                setSearchRelatedQuery('');
+                              }}
+                              className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] text-xs flex items-center justify-between gap-2"
+                            >
+                              <span className="font-serif truncate">{noteItem.title || 'Untitled Note'}</span>
+                              <span className="text-[10px] font-mono text-[#9C9388] uppercase shrink-0">
+                                {noteItem.type}
+                              </span>
+                            </div>
+                          ))
+                        )}
+                      </div>
                     </div>
                   )}
 
-                  <div className="max-h-32 overflow-y-auto space-y-1">
-                    {filteredUnlinkedNotes.length === 0 ? (
-                      <p className="text-[11px] text-[#9C9388] p-1.5 italic">No matching notes</p>
+                  <div className="space-y-1.5">
+                    {relatedNotes.length === 0 && relatedFragments.length === 0 ? (
+                      <p className="text-xs text-[#9C9388] italic p-3 bg-white/50 dark:bg-[#221F1E]/50 rounded-xl border border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 text-center">
+                        Belum ada catatan atau fragment terkait.
+                      </p>
                     ) : (
-                      filteredUnlinkedNotes.map((noteItem) => (
-                        <div
-                          key={`m-opt-${noteItem.id}`}
-                          onClick={() => {
-                            linkRelatedNote(activeNote.id, noteItem.id);
-                            setShowLinkSearchDropdown(false);
-                            setSearchRelatedQuery('');
-                          }}
-                          className="p-1.5 rounded-lg hover:bg-[#F5EFEB] dark:hover:bg-[#272422] text-xs flex items-center justify-between gap-2"
-                        >
-                          <span className="font-serif truncate">{noteItem.title || 'Untitled Note'}</span>
-                          <span className="text-[10px] font-mono text-[#9C9388] uppercase shrink-0">
-                            {noteItem.type}
-                          </span>
-                        </div>
-                      ))
+                      <>
+                        {relatedNotes.map((item) => (
+                          <div
+                            key={item.id}
+                            className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 text-xs"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setActiveNoteId(item.id);
+                                setShowMobileInspector(false);
+                              }}
+                              className="text-left flex-1 truncate"
+                            >
+                              <span className="font-serif block truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                                {item.title}
+                              </span>
+                              <span className="text-[10px] font-mono text-[#9C9388] uppercase">
+                                {item.type}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
+                              className="p-1 text-[#9C9388] hover:text-red-600 shrink-0"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        ))}
+
+                        {relatedFragments.map((frag) => (
+                          <div
+                            key={frag.id}
+                            className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 text-xs"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setShowMobileInspector(false);
+                                openFragmentDrawer(frag.id);
+                              }}
+                              className="text-left flex-1 truncate"
+                            >
+                              <span className="font-serif block truncate text-[#221F1D] dark:text-[#EDE8E1]">
+                                {frag.title}
+                              </span>
+                              <span className="text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] uppercase">
+                                Fragment · {frag.type}
+                              </span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => unlinkDiscoverConnection(activeNote.id, frag.id)}
+                              className="p-1 text-[#9C9388] hover:text-red-600 shrink-0"
+                            >
+                              <X size={13} />
+                            </button>
+                          </div>
+                        ))}
+                      </>
                     )}
                   </div>
                 </div>
               )}
-
-              <div className="space-y-1.5 max-h-40 overflow-y-auto">
-                {relatedNotes.length === 0 && relatedFragments.length === 0 ? (
-                  <p className="text-xs text-[#9C9388] italic p-2 bg-white/50 dark:bg-[#221F1E]/50 rounded-xl border border-[#E8E2D8]/60 dark:border-[#2F2B28]/60 text-center">
-                    No related note linked.
-                  </p>
-                ) : (
-                  <>
-                    {relatedNotes.map((item) => (
-                      <div
-                        key={item.id}
-                        className="p-2 rounded-lg bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 text-xs"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setActiveNoteId(item.id);
-                            setShowMobileInspector(false);
-                          }}
-                          className="font-serif truncate text-left flex-1 text-[#221F1D] dark:text-[#EDE8E1]"
-                        >
-                          {item.title}
-                        </button>
-                        <button
-                          onClick={() => unlinkRelatedNote(activeNote.id, item.id)}
-                          className="text-[#9C9388] hover:text-red-600 shrink-0"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ))}
-
-                    {relatedFragments.map((frag) => (
-                      <div
-                        key={frag.id}
-                        className="p-2 rounded-lg bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 text-xs"
-                      >
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setShowMobileInspector(false);
-                            openFragmentDrawer(frag.id);
-                          }}
-                          className="text-left flex-1 truncate"
-                        >
-                          <span className="font-serif block truncate text-[#221F1D] dark:text-[#EDE8E1]">
-                            {frag.title}
-                          </span>
-                          <span className="text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] uppercase">
-                            Fragment
-                          </span>
-                        </button>
-                        <button
-                          onClick={() => unlinkDiscoverConnection(activeNote.id, frag.id)}
-                          className="text-[#9C9388] hover:text-red-600 shrink-0"
-                        >
-                          <X size={13} />
-                        </button>
-                      </div>
-                    ))}
-                  </>
-                )}
-              </div>
             </div>
 
-            {/* 6. Semantic Embedding (bge-m3) */}
-            <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
-              <div className="flex items-center justify-between">
-                <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
-                  <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
-                  <span>Embedding (bge-m3)</span>
-                </label>
-                <span className="text-[10px] font-mono text-[#9C9388]">1024-dim</span>
-              </div>
-
-              {/* Status Badge */}
-              <div className="flex items-center justify-between pt-0.5">
-                <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
-                {(() => {
-                  if (!activeNote.embeddedAt) {
-                    return (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
-                        Not Embedded
-                      </span>
-                    );
-                  }
-                  const isOutdated =
-                    new Date(activeNote.updatedAt).getTime() -
-                      new Date(activeNote.embeddedAt).getTime() >
-                    3000;
-                  if (isOutdated) {
-                    return (
-                      <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border-amber-200 dark:border-amber-900/40">
-                        Needs Update
-                      </span>
-                    );
-                  }
-                  return (
-                    <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border-emerald-200 dark:border-emerald-900/40">
-                      Synced & Embedded
-                    </span>
-                  );
-                })()}
-              </div>
-
-              <div className="flex items-center gap-2 pt-1">
-                <button
-                  type="button"
-                  onClick={handleTriggerEmbed}
-                  disabled={isEmbeddingLoading}
-                  className="flex-1 py-2 px-3 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
-                >
-                  <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                  <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
-                </button>
-
-                {activeNote.embeddedAt && (
-                  <button
-                    type="button"
-                    onClick={handleRemoveEmbed}
-                    disabled={isEmbeddingLoading}
-                    className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
-                    title="Hapus vector embedding"
-                  >
-                    <Trash2 size={14} />
-                  </button>
-                )}
-              </div>
-
-              {embedNotice && (
-                <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
-                  {embedNotice}
-                </p>
-              )}
+            {/* Fixed Footer */}
+            <div className="px-3.5 sm:px-5 py-2.5 sm:py-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+              <button
+                type="button"
+                onClick={() => setShowMobileInspector(false)}
+                className="w-full py-2.5 bg-[#9A3412] dark:bg-[#EA580C] text-white rounded-xl text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors"
+              >
+                Done
+              </button>
             </div>
-
-            {/* 7. Timestamps (Created & Updated) */}
-            <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
-              <span>Created {formatDate(activeNote.createdAt)}</span>
-              <span>·</span>
-              <span>Updated {formatDate(activeNote.updatedAt)}</span>
-            </div>
-
-            <button
-              onClick={() => setShowMobileInspector(false)}
-              className="w-full py-2.5 bg-[#9A3412] text-white rounded-xl text-xs font-medium hover:bg-[#78280E]"
-            >
-              Done
-            </button>
           </div>
         </div>
       )}
@@ -1570,9 +1664,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
         onClose={() => setShowDeleteModal(false)}
         onConfirm={() => {
           if (activeNote) {
-            deleteNote(activeNote.id);
+            const deletedId = activeNote.id;
             setShowDeleteModal(false);
-            setActiveView('library');
+            deleteNote(deletedId);
+            exitDeletedNote(deletedId);
           }
         }}
         itemType="note"

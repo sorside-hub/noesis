@@ -71,15 +71,47 @@ import {
   enqueueDeleteConnection,
   dequeueDeleteConnection,
 } from '../lib/offlineSyncQueue';
+import { scrollToTop } from '../hooks/useScrollRestoration';
+
+export type DiscoverTab = 'synthesis' | 'connections' | 'clusters';
+
+export interface LibraryViewPrefs {
+  search: string;
+  selectedType: string;
+  selectedTag: string | null;
+  viewLayout: 'grid' | 'list';
+  sortBy: 'updated' | 'created' | 'alpha';
+  showArchivedOnly: boolean;
+  showFavoritesOnly: boolean;
+}
+
+export interface FragmentsViewPrefs {
+  search: string;
+  selectedType: string;
+  showFavoritesOnly: boolean;
+  sortBy: 'recent' | 'alpha';
+  viewMode: 'grid' | 'list';
+}
+
+interface NoesisHistoryEntry {
+  __noesis: true;
+  idx: number;
+  view: ViewMode;
+  noteId: string;
+  fragmentDrawerOpen: boolean;
+  fragmentId: string | null;
+  overlayId: string | null;
+}
 
 interface NoesisContextType {
   // Theme
   theme: ThemePreference;
   setTheme: (theme: ThemePreference) => void;
 
-  // Navigation
+  // Navigation & PWA History
   activeView: ViewMode;
   setActiveView: (view: ViewMode) => void;
+  selectTab: (tab: ViewMode) => void;
   activeStreamFilter: StreamFilter;
   setActiveStreamFilter: (filter: StreamFilter) => void;
   // Backward compatibility alias for stream filter
@@ -88,6 +120,22 @@ interface NoesisContextType {
 
   activeNoteId: string;
   setActiveNoteId: (id: string) => void;
+  navigateBack: () => void;
+  backTargetLabel: string;
+  openNoteFromFragment: (noteId: string) => void;
+  exitDeletedNote: (noteId: string) => void;
+  exitDeletedFragment: (fragmentId: string) => void;
+  registerOverlay: (id: string, onClose: () => void) => void;
+  unregisterOverlay: (id: string) => void;
+
+  // Persistent View Tab & Filter Preferences
+  discoverTab: DiscoverTab;
+  setDiscoverTab: React.Dispatch<React.SetStateAction<DiscoverTab>>;
+  libraryViewPrefs: LibraryViewPrefs;
+  setLibraryViewPrefs: React.Dispatch<React.SetStateAction<LibraryViewPrefs>>;
+  fragmentsViewPrefs: FragmentsViewPrefs;
+  setFragmentsViewPrefs: React.Dispatch<React.SetStateAction<FragmentsViewPrefs>>;
+
   searchQuery: string;
   setSearchQuery: (query: string) => void;
   selectedTag: string | null;
@@ -258,9 +306,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   // Views & Filter state
-  const [activeView, setActiveView] = useState<ViewMode>('home');
+  const [activeView, setActiveViewState] = useState<ViewMode>('home');
   const [activeStreamFilter, setActiveStreamFilter] = useState<StreamFilter>('all');
-  const [activeNoteId, setActiveNoteId] = useState<string>('');
+  const [activeNoteId, setActiveNoteIdState] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTag, setSelectedTag] = useState<string | null>(null);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(false);
@@ -270,8 +318,195 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [isFragmentDrawerOpen, setIsFragmentDrawerOpen] = useState<boolean>(false);
   const [synthesisTargetNoteId, setSynthesisTargetNoteId] = useState<string | null>(null);
 
+  // Persistent Tab & Filter Preferences (kept across navigation & Back)
+  const [discoverTab, setDiscoverTab] = useState<DiscoverTab>('synthesis');
+  const [libraryViewPrefs, setLibraryViewPrefs] = useState<LibraryViewPrefs>({
+    search: '',
+    selectedType: 'all',
+    selectedTag: null,
+    viewLayout: 'grid',
+    sortBy: 'updated',
+    showArchivedOnly: false,
+    showFavoritesOnly: false,
+  });
+  const [fragmentsViewPrefs, setFragmentsViewPrefs] = useState<FragmentsViewPrefs>({
+    search: '',
+    selectedType: 'all',
+    showFavoritesOnly: false,
+    sortBy: 'recent',
+    viewMode: 'grid',
+  });
+
+  // =========================================================================
+  // CENTRALIZED PWA NAVIGATION HISTORY & LIFO OVERLAY CONTROLLER
+  // =========================================================================
+  const TOP_LEVEL_VIEWS = useMemo(
+    () => new Set<ViewMode>(['home', 'library', 'fragments', 'capture', 'discover', 'projects']),
+    []
+  );
+
+  const initialHistoryEntry: NoesisHistoryEntry = {
+    __noesis: true,
+    idx: 0,
+    view: 'home',
+    noteId: '',
+    fragmentDrawerOpen: false,
+    fragmentId: null,
+    overlayId: null,
+  };
+
+  const historyStackRef = useRef<NoesisHistoryEntry[]>([initialHistoryEntry]);
+  const historyCursorRef = useRef<number>(0);
+  const overlaysRef = useRef<Map<string, () => void>>(new Map());
+  const closingOverlayIdsRef = useRef<Set<string>>(new Set());
+  const closingMicrotaskScheduledRef = useRef<boolean>(false);
+  const expectedPopIdxRef = useRef<number | null>(null);
+  const pendingNavAfterGoRef = useRef<(() => void) | null>(null);
+
+  const activeViewRef = useRef<ViewMode>('home');
+  const activeNoteIdRef = useRef<string>('');
+  const isFragmentDrawerOpenRef = useRef<boolean>(false);
+  const activeFragmentIdRef = useRef<string | null>(null);
+  const lastLibraryNoteIdRef = useRef<string | null>(null);
+  const lastFragmentIdRef = useRef<string | null>(null);
+  const [backTargetLabel, setBackTargetLabel] = useState<string>('Home');
+
+  const computeBackTargetLabel = (stack: NoesisHistoryEntry[], currentIdx: number): string => {
+    for (let i = currentIdx - 1; i >= 0; i--) {
+      const entry = stack[i];
+      if (!entry || entry.overlayId) continue;
+      if (entry.fragmentDrawerOpen) return 'Fragment';
+      switch (entry.view) {
+        case 'home':
+          return 'Home';
+        case 'library':
+          return 'Library';
+        case 'fragments':
+        case 'capture':
+          return 'Fragments';
+        case 'discover':
+          return 'Discover';
+        case 'projects':
+          return 'Projects';
+        case 'settings':
+          return 'Settings';
+        case 'editor':
+          return 'Back';
+        default:
+          return 'Home';
+      }
+    }
+    return 'Home';
+  };
+
+  const applyEntryToReactState = (entry: NoesisHistoryEntry) => {
+    activeViewRef.current = entry.view;
+    setActiveViewState(entry.view);
+    activeNoteIdRef.current = entry.noteId;
+    setActiveNoteIdState(entry.noteId);
+    isFragmentDrawerOpenRef.current = entry.fragmentDrawerOpen;
+    setIsFragmentDrawerOpen(entry.fragmentDrawerOpen);
+    activeFragmentIdRef.current = entry.fragmentId;
+    setActiveFragmentId(entry.fragmentId);
+    setIsQuickCaptureOpen(entry.fragmentDrawerOpen);
+    setBackTargetLabel(computeBackTargetLabel(historyStackRef.current, entry.idx));
+  };
+
+  const dismissTopOverlaysSync = (): number => {
+    let poppedOverlays = 0;
+    let scan = historyCursorRef.current;
+    while (scan > 0) {
+      const entry = historyStackRef.current[scan];
+      if (!entry?.overlayId) break;
+      const oid = entry.overlayId;
+      overlaysRef.current.delete(oid);
+      closingOverlayIdsRef.current.delete(oid);
+      poppedOverlays += 1;
+      scan -= 1;
+    }
+    return poppedOverlays;
+  };
+
+  const flushClosingOverlays = () => {
+    closingMicrotaskScheduledRef.current = false;
+    if (closingOverlayIdsRef.current.size === 0) return;
+
+    let targetCursor = historyCursorRef.current;
+    let popCount = 0;
+    while (targetCursor > 0) {
+      const top = historyStackRef.current[targetCursor];
+      if (top?.overlayId && closingOverlayIdsRef.current.has(top.overlayId)) {
+        closingOverlayIdsRef.current.delete(top.overlayId);
+        popCount += 1;
+        targetCursor -= 1;
+      } else {
+        break;
+      }
+    }
+    closingOverlayIdsRef.current.clear();
+
+    if (popCount > 0) {
+      historyCursorRef.current = targetCursor;
+      historyStackRef.current = historyStackRef.current.slice(0, targetCursor + 1);
+      setBackTargetLabel(computeBackTargetLabel(historyStackRef.current, targetCursor));
+      window.history.go(-popCount);
+    }
+  };
+
+  const registerOverlay = (id: string, onClose: () => void) => {
+    overlaysRef.current.set(id, onClose);
+    closingOverlayIdsRef.current.delete(id);
+
+    const cur = historyStackRef.current[historyCursorRef.current] || initialHistoryEntry;
+    const nextIdx = historyCursorRef.current + 1;
+    const nextEntry: NoesisHistoryEntry = {
+      __noesis: true,
+      idx: nextIdx,
+      view: cur.view,
+      noteId: cur.noteId,
+      fragmentDrawerOpen: cur.fragmentDrawerOpen,
+      fragmentId: cur.fragmentId,
+      overlayId: id,
+    };
+    historyStackRef.current = [...historyStackRef.current.slice(0, nextIdx), nextEntry];
+    historyCursorRef.current = nextIdx;
+    window.history.pushState(nextEntry, '');
+  };
+
+  const unregisterOverlay = (id: string) => {
+    if (!overlaysRef.current.has(id)) {
+      return;
+    }
+    overlaysRef.current.delete(id);
+    closingOverlayIdsRef.current.add(id);
+    if (!closingMicrotaskScheduledRef.current) {
+      closingMicrotaskScheduledRef.current = true;
+      queueMicrotask(flushClosingOverlays);
+    }
+  };
+
+  const resetNavigationToHome = () => {
+    overlaysRef.current.forEach((closeFn) => closeFn());
+    overlaysRef.current.clear();
+    closingOverlayIdsRef.current.clear();
+    pendingNavAfterGoRef.current = null;
+    expectedPopIdxRef.current = null;
+
+    const delta = historyCursorRef.current;
+    historyStackRef.current = [initialHistoryEntry];
+    historyCursorRef.current = 0;
+    applyEntryToReactState(initialHistoryEntry);
+
+    if (delta > 0) {
+      window.history.go(-delta);
+    } else {
+      window.history.replaceState(initialHistoryEntry, '');
+    }
+  };
+
   const startUpdateSynthesis = (noteId: string) => {
     setSynthesisTargetNoteId(noteId);
+    setDiscoverTab('synthesis');
     setActiveView('discover');
   };
 
@@ -429,13 +664,26 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setApprovedConnections([]);
     setDismissedConnections([]);
     setConnectionAnalyses({});
-    setActiveNoteId('');
-    setActiveFragmentId(null);
-    setIsFragmentDrawerOpen(false);
-    setIsQuickCaptureOpen(false);
     setSearchQuery('');
     setSelectedTag(null);
-    setActiveView('home');
+    setDiscoverTab('synthesis');
+    setLibraryViewPrefs({
+      search: '',
+      selectedType: 'all',
+      selectedTag: null,
+      viewLayout: 'grid',
+      sortBy: 'updated',
+      showArchivedOnly: false,
+      showFavoritesOnly: false,
+    });
+    setFragmentsViewPrefs({
+      search: '',
+      selectedType: 'all',
+      showFavoritesOnly: false,
+      sortBy: 'recent',
+      viewMode: 'grid',
+    });
+    resetNavigationToHome();
   };
 
   const clearLocalWorkspaceData = (wipeAuthTokens = false) => {
@@ -934,7 +1182,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         ) {
           setNotes(dbNotes);
           if (dbNotes.length > 0) {
-            setActiveNoteId((prevId) => prevId || dbNotes[0].id);
+            setActiveNoteIdState((prevId) => {
+              const resolved = prevId || dbNotes[0].id;
+              activeNoteIdRef.current = resolved;
+              return resolved;
+            });
           }
         }
 
@@ -1073,8 +1325,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     };
 
     setNotes((prev) => [newNote, ...prev]);
-    setActiveNoteId(newNote.id);
-    setActiveView('editor');
+    notesRef.current = [newNote, ...notesRef.current];
+    activeNoteIdRef.current = newNote.id;
+    setActiveNoteIdState(newNote.id);
+    setActiveView('editor', newNote.id);
 
     if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;
@@ -1242,17 +1496,20 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   const discardNoteIfEmpty = (id: string): boolean => {
-    const target = notes.find((n) => n.id === id);
+    const target = notesRef.current.find((n) => n.id === id);
     if (!target) return false;
     if (isNoteEffectivelyEmpty(target)) {
       if (embedTimersRef.current[id]) {
         clearTimeout(embedTimersRef.current[id]);
         delete embedTimersRef.current[id];
       }
-      const remaining = notes.filter((n) => n.id !== id);
+      const remaining = notesRef.current.filter((n) => n.id !== id);
+      notesRef.current = remaining;
       setNotes(remaining);
-      if (activeNoteId === id && remaining.length > 0) {
-        setActiveNoteId(remaining[0].id);
+      if (activeNoteIdRef.current === id) {
+        const nextId = remaining.length > 0 ? remaining[0].id : '';
+        activeNoteIdRef.current = nextId;
+        setActiveNoteIdState(nextId);
       }
 
       if (canRemoteSync() && authUserRef.current) {
@@ -1278,10 +1535,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       clearTimeout(embedTimersRef.current[id]);
       delete embedTimersRef.current[id];
     }
-    const remaining = notes.filter((n) => n.id !== id);
+    const remaining = notesRef.current.filter((n) => n.id !== id);
+    notesRef.current = remaining;
     setNotes(remaining);
-    if (remaining.length > 0) {
-      setActiveNoteId(remaining[0].id);
+    if (activeNoteIdRef.current === id) {
+      const nextId = remaining.length > 0 ? remaining[0].id : '';
+      activeNoteIdRef.current = nextId;
+      setActiveNoteIdState(nextId);
     }
 
     if (canRemoteSync() && authUserRef.current) {
@@ -1359,17 +1619,504 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     );
   };
 
+  // =========================================================================
+  // NAVIGATION METHODS (Synced with window.history & popstate)
+  // =========================================================================
+  const setActiveView = (view: ViewMode, overrideNoteId?: string) => {
+    setIsMobileDrawerOpen(false);
+    const poppedOverlays = dismissTopOverlaysSync();
+    const baseCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
+    const baseEntry = historyStackRef.current[baseCursor] || initialHistoryEntry;
+    const prevNoteId = activeNoteIdRef.current;
+    const targetNoteId = overrideNoteId ?? prevNoteId;
+
+    // Discard empty note if leaving editor or switching notes
+    let discardedCurrentEditorNote = false;
+    if (
+      activeViewRef.current === 'editor' &&
+      prevNoteId &&
+      (view !== 'editor' || prevNoteId !== targetNoteId)
+    ) {
+      discardedCurrentEditorNote = discardNoteIfEmpty(prevNoteId);
+    }
+
+    // 1. Navigating to Home -> Always rewind cleanly to root (depth 0)
+    if (view === 'home') {
+      const totalPops = historyCursorRef.current;
+      historyStackRef.current = [initialHistoryEntry];
+      historyCursorRef.current = 0;
+      applyEntryToReactState(initialHistoryEntry);
+      if (totalPops > 0) {
+        window.history.go(-totalPops);
+      } else {
+        window.history.replaceState(initialHistoryEntry, '');
+      }
+      return;
+    }
+
+    if (view === 'library') {
+      lastLibraryNoteIdRef.current = null;
+    } else if (view === 'editor') {
+      lastLibraryNoteIdRef.current = targetNoteId || null;
+    }
+
+    // 2. Top-Level Hub-and-Spoke Views (Opsi B: live at depth 1 above Home)
+    if (TOP_LEVEL_VIEWS.has(view)) {
+      const targetEntry: NoesisHistoryEntry = {
+        __noesis: true,
+        idx: 1,
+        view,
+        noteId: '',
+        fragmentDrawerOpen: false,
+        fragmentId: null,
+        overlayId: null,
+      };
+
+      const curCursor = historyCursorRef.current;
+      if (curCursor === 0) {
+        historyStackRef.current = [historyStackRef.current[0] || initialHistoryEntry, targetEntry];
+        historyCursorRef.current = 1;
+        applyEntryToReactState(targetEntry);
+        window.history.pushState(targetEntry, '');
+      } else if (curCursor === 1) {
+        if (
+          baseEntry.view === view &&
+          !baseEntry.fragmentDrawerOpen &&
+          poppedOverlays === 0
+        ) {
+          return;
+        }
+        historyStackRef.current = [historyStackRef.current[0] || initialHistoryEntry, targetEntry];
+        historyCursorRef.current = 1;
+        applyEntryToReactState(targetEntry);
+        window.history.replaceState(targetEntry, '');
+      } else {
+        const delta = curCursor - 1;
+        historyStackRef.current = [historyStackRef.current[0] || initialHistoryEntry, targetEntry];
+        historyCursorRef.current = 1;
+        expectedPopIdxRef.current = 1;
+        pendingNavAfterGoRef.current = () => {
+          window.history.replaceState(targetEntry, '');
+        };
+        applyEntryToReactState(targetEntry);
+        window.history.go(-delta);
+      }
+      return;
+    }
+
+    // 3. Sub-pages ('editor', 'settings')
+    const resolvedNoteId = view === 'editor' ? targetNoteId : '';
+    if (
+      poppedOverlays === 0 &&
+      baseEntry.view === view &&
+      baseEntry.noteId === resolvedNoteId &&
+      !baseEntry.fragmentDrawerOpen
+    ) {
+      return;
+    }
+
+    let replaceSteps = poppedOverlays;
+    if (discardedCurrentEditorNote && baseEntry.view === 'editor' && baseCursor > 0) {
+      replaceSteps += 1;
+    }
+
+    const targetIdx = Math.max(1, historyCursorRef.current - replaceSteps + 1);
+    const nextEntry: NoesisHistoryEntry = {
+      __noesis: true,
+      idx: targetIdx,
+      view,
+      noteId: resolvedNoteId,
+      fragmentDrawerOpen: false,
+      fragmentId: null,
+      overlayId: null,
+    };
+
+    if (replaceSteps === 0) {
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      applyEntryToReactState(nextEntry);
+      window.history.pushState(nextEntry, '');
+    } else if (replaceSteps === 1) {
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      applyEntryToReactState(nextEntry);
+      window.history.replaceState(nextEntry, '');
+    } else {
+      const delta = replaceSteps - 1;
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      expectedPopIdxRef.current = targetIdx;
+      pendingNavAfterGoRef.current = () => {
+        window.history.replaceState(nextEntry, '');
+      };
+      applyEntryToReactState(nextEntry);
+      window.history.go(-delta);
+    }
+  };
+
+  const setActiveNoteId = (id: string) => {
+    const prevId = activeNoteIdRef.current;
+    activeNoteIdRef.current = id;
+    setActiveNoteIdState(id);
+
+    if (activeViewRef.current === 'editor' && id && id !== prevId) {
+      setActiveView('editor', id);
+    }
+  };
+
+  const openNoteFromFragment = (noteId: string) => {
+    activeNoteIdRef.current = noteId;
+    setActiveNoteIdState(noteId);
+    setActiveView('editor', noteId);
+  };
+
   const openFragmentDrawer = (fragmentId?: string | null) => {
-    setActiveFragmentId(fragmentId ?? null);
-    setIsFragmentDrawerOpen(true);
-    setIsQuickCaptureOpen(true);
+    setIsMobileDrawerOpen(false);
+    const nextFragId = fragmentId ?? null;
+    lastFragmentIdRef.current = nextFragId;
+    const poppedOverlays = dismissTopOverlaysSync();
+    const baseCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
+    const baseEntry = historyStackRef.current[baseCursor] || initialHistoryEntry;
+
+    if (
+      poppedOverlays === 0 &&
+      baseEntry.fragmentDrawerOpen &&
+      baseEntry.fragmentId === nextFragId
+    ) {
+      return;
+    }
+
+    const targetIdx = Math.max(1, historyCursorRef.current - poppedOverlays + 1);
+    const nextEntry: NoesisHistoryEntry = {
+      __noesis: true,
+      idx: targetIdx,
+      view: baseEntry.view,
+      noteId: baseEntry.noteId,
+      fragmentDrawerOpen: true,
+      fragmentId: nextFragId,
+      overlayId: null,
+    };
+
+    if (poppedOverlays === 0) {
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      applyEntryToReactState(nextEntry);
+      window.history.pushState(nextEntry, '');
+    } else if (poppedOverlays === 1) {
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      applyEntryToReactState(nextEntry);
+      window.history.replaceState(nextEntry, '');
+    } else {
+      const delta = poppedOverlays - 1;
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      expectedPopIdxRef.current = targetIdx;
+      pendingNavAfterGoRef.current = () => {
+        window.history.replaceState(nextEntry, '');
+      };
+      applyEntryToReactState(nextEntry);
+      window.history.go(-delta);
+    }
   };
 
   const closeFragmentDrawer = () => {
-    setIsFragmentDrawerOpen(false);
-    setActiveFragmentId(null);
-    setIsQuickCaptureOpen(false);
+    lastFragmentIdRef.current = null;
+    const poppedOverlays = dismissTopOverlaysSync();
+    let targetCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
+
+    while (targetCursor > 0 && historyStackRef.current[targetCursor]?.fragmentDrawerOpen) {
+      targetCursor -= 1;
+    }
+
+    const totalPops = historyCursorRef.current - targetCursor;
+    if (totalPops > 0) {
+      const targetEntry = historyStackRef.current[targetCursor] || initialHistoryEntry;
+      historyStackRef.current = historyStackRef.current.slice(0, targetCursor + 1);
+      historyCursorRef.current = targetCursor;
+      applyEntryToReactState(targetEntry);
+      window.history.go(-totalPops);
+    } else {
+      isFragmentDrawerOpenRef.current = false;
+      activeFragmentIdRef.current = null;
+      setIsFragmentDrawerOpen(false);
+      setActiveFragmentId(null);
+      setIsQuickCaptureOpen(false);
+    }
   };
+
+  const navigateBack = () => {
+    lastLibraryNoteIdRef.current = null;
+    if (historyCursorRef.current > 0) {
+      window.history.back();
+      return;
+    }
+    if (activeViewRef.current === 'editor' && activeNoteIdRef.current) {
+      discardNoteIfEmpty(activeNoteIdRef.current);
+      setActiveView('library');
+    } else if (activeViewRef.current !== 'home') {
+      setActiveView('home');
+    }
+  };
+
+  const selectTab = (targetTab: ViewMode) => {
+    setIsMobileDrawerOpen(false);
+
+    // 1. LIBRARY TAB
+    if (targetTab === 'library') {
+      // If currently inside an open note in Editor -> POP TO ROOT (return to main library list)
+      if (activeViewRef.current === 'editor') {
+        lastLibraryNoteIdRef.current = null;
+        if (activeNoteIdRef.current) {
+          discardNoteIfEmpty(activeNoteIdRef.current);
+        }
+        setActiveView('library');
+        return;
+      }
+
+      // If already at main library list -> SCROLL TO TOP
+      if (activeViewRef.current === 'library') {
+        scrollToTop('library');
+        return;
+      }
+
+      // Coming from another tab (e.g. Home, Fragments, Discover)
+      // Check if we remembered an open note in Library
+      const rememberedNoteId = lastLibraryNoteIdRef.current;
+      if (rememberedNoteId && notesRef.current.some((n) => n.id === rememberedNoteId && !n.archived)) {
+        setActiveView('editor', rememberedNoteId);
+      } else {
+        setActiveView('library');
+      }
+      return;
+    }
+
+    // 2. FRAGMENTS TAB
+    if (targetTab === 'fragments' || targetTab === 'capture') {
+      // If currently viewing a fragment in Drawer -> POP TO ROOT (close drawer)
+      if (isFragmentDrawerOpenRef.current) {
+        closeFragmentDrawer();
+        lastFragmentIdRef.current = null;
+        return;
+      }
+
+      // If already on fragments list -> SCROLL TO TOP
+      if (activeViewRef.current === 'fragments' || activeViewRef.current === 'capture') {
+        scrollToTop('fragments');
+        return;
+      }
+
+      // Coming from another tab: check if a fragment was open
+      const rememberedFragId = lastFragmentIdRef.current;
+      if (rememberedFragId && fragmentsRef.current.some((f) => f.id === rememberedFragId)) {
+        setActiveView('fragments');
+        openFragmentDrawer(rememberedFragId);
+      } else {
+        setActiveView('fragments');
+      }
+      return;
+    }
+
+    // 3. HOME TAB
+    if (targetTab === 'home') {
+      if (activeViewRef.current === 'home') {
+        scrollToTop('home');
+        return;
+      }
+      setActiveView('home');
+      return;
+    }
+
+    // 4. DISCOVER TAB
+    if (targetTab === 'discover') {
+      if (activeViewRef.current === 'discover') {
+        scrollToTop(`discover:${discoverTab}`);
+        return;
+      }
+      setActiveView('discover');
+      return;
+    }
+
+    // 5. PROJECTS TAB
+    if (targetTab === 'projects') {
+      if (activeViewRef.current === 'projects') {
+        scrollToTop('projects');
+        return;
+      }
+      setActiveView('projects');
+      return;
+    }
+
+    // 6. SETTINGS TAB
+    if (targetTab === 'settings') {
+      if (activeViewRef.current === 'settings') {
+        scrollToTop('settings');
+        return;
+      }
+      setActiveView('settings');
+      return;
+    }
+
+    setActiveView(targetTab);
+  };
+
+  const exitDeletedNote = (deletedNoteId: string) => {
+    if (lastLibraryNoteIdRef.current === deletedNoteId) {
+      lastLibraryNoteIdRef.current = null;
+    }
+    dismissTopOverlaysSync();
+    let targetCursor = historyCursorRef.current;
+    while (
+      targetCursor > 0 &&
+      (historyStackRef.current[targetCursor]?.overlayId !== null ||
+        (historyStackRef.current[targetCursor]?.view === 'editor' &&
+          historyStackRef.current[targetCursor]?.noteId === deletedNoteId))
+    ) {
+      targetCursor -= 1;
+    }
+
+    const delta = historyCursorRef.current - targetCursor;
+    const targetEntry = historyStackRef.current[targetCursor] || initialHistoryEntry;
+    historyStackRef.current = historyStackRef.current.slice(0, targetCursor + 1);
+    historyCursorRef.current = targetCursor;
+    applyEntryToReactState(targetEntry);
+
+    if (delta > 0) {
+      window.history.go(-delta);
+    } else {
+      setActiveView('library');
+    }
+  };
+
+  const exitDeletedFragment = (deletedFragmentId: string) => {
+    if (lastFragmentIdRef.current === deletedFragmentId) {
+      lastFragmentIdRef.current = null;
+    }
+    dismissTopOverlaysSync();
+    let targetCursor = historyCursorRef.current;
+    while (
+      targetCursor > 0 &&
+      (historyStackRef.current[targetCursor]?.overlayId !== null ||
+        (historyStackRef.current[targetCursor]?.fragmentDrawerOpen &&
+          historyStackRef.current[targetCursor]?.fragmentId === deletedFragmentId))
+    ) {
+      targetCursor -= 1;
+    }
+
+    const delta = historyCursorRef.current - targetCursor;
+    const targetEntry = historyStackRef.current[targetCursor] || initialHistoryEntry;
+    historyStackRef.current = historyStackRef.current.slice(0, targetCursor + 1);
+    historyCursorRef.current = targetCursor;
+    applyEntryToReactState(targetEntry);
+
+    if (delta > 0) {
+      window.history.go(-delta);
+    }
+  };
+
+  // Initialize root history entry and handle OS/Browser Back (`popstate`)
+  useEffect(() => {
+    window.history.replaceState(initialHistoryEntry, '');
+
+    const handlePopState = (event: PopStateEvent) => {
+      const incoming = event.state as NoesisHistoryEntry | null;
+
+      if (pendingNavAfterGoRef.current && incoming?.idx === expectedPopIdxRef.current) {
+        const fn = pendingNavAfterGoRef.current;
+        pendingNavAfterGoRef.current = null;
+        expectedPopIdxRef.current = null;
+        fn();
+        return;
+      }
+
+      if (!incoming || !incoming.__noesis) {
+        overlaysRef.current.forEach((closeFn) => closeFn());
+        overlaysRef.current.clear();
+        closingOverlayIdsRef.current.clear();
+        historyStackRef.current = [initialHistoryEntry];
+        historyCursorRef.current = 0;
+        applyEntryToReactState(initialHistoryEntry);
+        window.history.replaceState(initialHistoryEntry, '');
+        return;
+      }
+
+      const prevCursor = historyCursorRef.current;
+      const prevEntry = historyStackRef.current[prevCursor];
+      const nextIdx = incoming.idx;
+
+      // Already synced synchronously by programmatic navigation / overlay close
+      if (nextIdx === prevCursor) {
+        return;
+      }
+
+      if (nextIdx < prevCursor) {
+        for (let i = prevCursor; i > nextIdx; i--) {
+          const popped = historyStackRef.current[i];
+          if (popped?.overlayId) {
+            const closeFn = overlaysRef.current.get(popped.overlayId);
+            overlaysRef.current.delete(popped.overlayId);
+            closingOverlayIdsRef.current.delete(popped.overlayId);
+            closeFn?.();
+          }
+        }
+
+        if (
+          prevEntry?.view === 'editor' &&
+          prevEntry.noteId &&
+          (incoming.view !== 'editor' || incoming.noteId !== prevEntry.noteId)
+        ) {
+          lastLibraryNoteIdRef.current = null;
+          discardNoteIfEmpty(prevEntry.noteId);
+        }
+        if (prevEntry?.fragmentDrawerOpen && !incoming.fragmentDrawerOpen) {
+          lastFragmentIdRef.current = null;
+        }
+      }
+
+      // Guard against landing on a deleted Note or deleted Fragment (e.g. browser Forward)
+      let resolvedEntry = incoming;
+      if (resolvedEntry.overlayId && nextIdx > prevCursor) {
+        resolvedEntry = { ...resolvedEntry, overlayId: null };
+        window.history.replaceState(resolvedEntry, '');
+      }
+
+      if (
+        resolvedEntry.view === 'editor' &&
+        resolvedEntry.noteId &&
+        !notesRef.current.some((n) => n.id === resolvedEntry.noteId)
+      ) {
+        if (nextIdx > 0) {
+          window.history.back();
+          return;
+        }
+        resolvedEntry = initialHistoryEntry;
+        window.history.replaceState(resolvedEntry, '');
+      }
+
+      if (
+        resolvedEntry.fragmentDrawerOpen &&
+        resolvedEntry.fragmentId &&
+        !fragmentsRef.current.some((f) => f.id === resolvedEntry.fragmentId)
+      ) {
+        resolvedEntry = {
+          ...resolvedEntry,
+          fragmentDrawerOpen: false,
+          fragmentId: null,
+        };
+        window.history.replaceState(resolvedEntry, '');
+      }
+
+      historyStackRef.current = [
+        ...historyStackRef.current.slice(0, nextIdx),
+        resolvedEntry,
+      ];
+      historyCursorRef.current = nextIdx;
+      applyEntryToReactState(resolvedEntry);
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
 
   const formatDateDDMMYYYY = (d: Date = new Date()) => {
     const day = String(d.getDate()).padStart(2, '0');
@@ -1482,9 +2229,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       clearTimeout(fragEmbedTimersRef.current[id]);
       delete fragEmbedTimersRef.current[id];
     }
-    setFragments((prev) => prev.filter((f) => f.id !== id));
-    if (activeFragmentId === id) {
-      closeFragmentDrawer();
+    const nextFragments = fragmentsRef.current.filter((f) => f.id !== id);
+    fragmentsRef.current = nextFragments;
+    setFragments(nextFragments);
+    if (activeFragmentIdRef.current === id) {
+      exitDeletedFragment(id);
     }
     if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;
@@ -2120,11 +2869,45 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return next;
     });
 
-    setFragments((prev) => prev.filter((f) => f.id !== frag.id));
+    const nextFragments = fragmentsRef.current.filter((f) => f.id !== frag.id);
+    fragmentsRef.current = nextFragments;
+    setFragments(nextFragments);
+    notesRef.current = [newNote, ...notesRef.current];
 
-    setActiveNoteId(newId);
-    setActiveView('editor');
-    closeFragmentDrawer();
+    // Replace FragmentDrawer (and any confirmation overlay) in history with the promoted Note Editor
+    dismissTopOverlaysSync();
+    let baseCursor = historyCursorRef.current;
+    while (baseCursor > 0 && historyStackRef.current[baseCursor]?.fragmentDrawerOpen) {
+      baseCursor -= 1;
+    }
+    const targetIdx = baseCursor + 1;
+    const promotedEntry: NoesisHistoryEntry = {
+      __noesis: true,
+      idx: targetIdx,
+      view: 'editor',
+      noteId: newId,
+      fragmentDrawerOpen: false,
+      fragmentId: null,
+      overlayId: null,
+    };
+
+    const delta = historyCursorRef.current - targetIdx;
+    historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), promotedEntry];
+    historyCursorRef.current = targetIdx;
+    applyEntryToReactState(promotedEntry);
+
+    if (delta > 0) {
+      expectedPopIdxRef.current = targetIdx;
+      pendingNavAfterGoRef.current = () => {
+        window.history.replaceState(promotedEntry, '');
+      };
+      window.history.go(-delta);
+    } else if (delta === 0) {
+      window.history.replaceState(promotedEntry, '');
+    } else {
+      window.history.pushState(promotedEntry, '');
+    }
+
     return { ok: true, noteId: newId };
   };
 
@@ -2504,12 +3287,26 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         setTheme,
         activeView,
         setActiveView,
+        selectTab,
         activeStreamFilter,
         setActiveStreamFilter,
         activeNotebookId,
         setActiveNotebookId,
         activeNoteId,
         setActiveNoteId,
+        navigateBack,
+        backTargetLabel,
+        openNoteFromFragment,
+        exitDeletedNote,
+        exitDeletedFragment,
+        registerOverlay,
+        unregisterOverlay,
+        discoverTab,
+        setDiscoverTab,
+        libraryViewPrefs,
+        setLibraryViewPrefs,
+        fragmentsViewPrefs,
+        setFragmentsViewPrefs,
         searchQuery,
         setSearchQuery,
         selectedTag,

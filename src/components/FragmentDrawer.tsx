@@ -21,6 +21,8 @@ import {
   AlertCircle,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 
 export const FragmentDrawer: React.FC = () => {
   const {
@@ -32,8 +34,7 @@ export const FragmentDrawer: React.FC = () => {
     approvedConnections,
     unlinkDiscoverConnection,
     openFragmentDrawer,
-    setActiveNoteId,
-    setActiveView,
+    openNoteFromFragment,
     promoteFragmentToNote,
     createFragment,
     updateFragment,
@@ -42,6 +43,10 @@ export const FragmentDrawer: React.FC = () => {
     manualEmbedFragment,
     manualRemoveEmbedFragment,
   } = useNoesis();
+
+  const bodyScrollRef = useScrollRestoration<HTMLDivElement>(
+    activeFragmentId ? `fragment:${activeFragmentId}` : null
+  );
 
   const activeFragment = fragments.find((f) => f.id === activeFragmentId);
   const isCreateMode = !activeFragment;
@@ -60,6 +65,16 @@ export const FragmentDrawer: React.FC = () => {
   const [showPromoteConfirm, setShowPromoteConfirm] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
   const [promoteError, setPromoteError] = useState<string | null>(null);
+
+  useBackOverlay(showDeleteConfirm, () => setShowDeleteConfirm(false), 'fragment-delete-modal');
+  useBackOverlay(
+    showPromoteConfirm && !isPromoting,
+    () => {
+      setShowPromoteConfirm(false);
+      setPromoteError(null);
+    },
+    'fragment-promote-confirm'
+  );
 
   const handleConfirmPromote = async () => {
     if (!activeFragment || isPromoting) return;
@@ -208,19 +223,18 @@ export const FragmentDrawer: React.FC = () => {
     }
   };
 
-  const handleAddTag = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter' && tagInput.trim()) {
-      e.preventDefault();
-      const cleaned = tagInput.trim().toLowerCase().replace(/^#/, '');
-      if (cleaned && !tagsList.includes(cleaned)) {
-        const nextTags = [...tagsList, cleaned];
-        setTagsList(nextTags);
-        if (!isCreateMode && activeFragment) {
-          updateFragment(activeFragment.id, { tags: nextTags });
-        }
+  const handleAddTag = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!tagInput.trim()) return;
+    const cleaned = tagInput.trim().toLowerCase().replace(/^#/, '');
+    if (cleaned && !tagsList.includes(cleaned)) {
+      const nextTags = [...tagsList, cleaned];
+      setTagsList(nextTags);
+      if (!isCreateMode && activeFragment) {
+        updateFragment(activeFragment.id, { tags: nextTags });
       }
-      setTagInput('');
     }
+    setTagInput('');
   };
 
   const handleRemoveTag = (tagToRemove: string) => {
@@ -283,16 +297,14 @@ export const FragmentDrawer: React.FC = () => {
         {/* HEADER: Distinguished only between Create Mode and View/Edit Mode         */}
         {/* ========================================================================= */}
         {isCreateMode ? (
-          <div className="px-5 sm:px-6 py-4 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1A1817]">
-            <div className="flex items-center gap-2.5">
-              <div className="w-8 h-8 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center">
-                <Feather size={16} />
+          <div className="px-3.5 sm:px-5 py-2.5 sm:py-3.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1A1817]">
+            <div className="flex items-center gap-2">
+              <div className="w-7 h-7 rounded-lg bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center">
+                <Feather size={14} />
               </div>
-              <div>
-                <h2 className="font-serif text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                  Capture Fragment
-                </h2>
-              </div>
+              <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                Capture Fragment
+              </h2>
             </div>
 
             <button
@@ -305,19 +317,19 @@ export const FragmentDrawer: React.FC = () => {
             </button>
           </div>
         ) : (
-          <div className="px-5 sm:px-6 py-4 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1A1817]">
-            <div className="flex items-center gap-2">
+          <div className="px-3.5 sm:px-5 py-2.5 sm:py-3.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1A1817]">
+            <div className="flex items-center gap-1.5 min-w-0">
               <span className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] font-semibold">
                 {activeFragment.type}
               </span>
               <span className="text-[#9C9388]">·</span>
-              <span className="text-xs font-mono text-[#9C9388] dark:text-[#736C62]">
+              <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62] truncate">
                 {activeFragment.date}
               </span>
             </div>
 
             {/* Action Toolbar */}
-            <div className="flex items-center gap-1">
+            <div className="flex items-center gap-0.5 sm:gap-1 shrink-0">
               {/* Embedding Status Indicator Dot */}
               {(() => {
                 const status = getEmbedStatus();
@@ -385,7 +397,7 @@ export const FragmentDrawer: React.FC = () => {
                 type="button"
                 disabled={isPromoting}
                 onClick={closeFragmentDrawer}
-                className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors ml-1"
+                className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors ml-0.5"
                 title="Close"
               >
                 <X size={18} />
@@ -395,15 +407,12 @@ export const FragmentDrawer: React.FC = () => {
         )}
 
         {/* ========================================================================= */}
-        {/* BODY: 100% IDENTICAL DESIGN FOR BOTH CREATE AND VIEW/EDIT MODES           */}
+        {/* BODY: Compact, Unified Canvas for Create and View/Edit Modes              */}
         {/* ========================================================================= */}
-        <div className="flex-1 overflow-y-auto px-5 sm:px-6 py-5 space-y-6">
-          {/* Category Switcher Pill Tabs */}
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
-              Category
-            </label>
-            <div className="flex items-center gap-1.5 p-1 bg-[#F5EFEB] dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] w-fit">
+        <div ref={bodyScrollRef} className="flex-1 overflow-y-auto px-3.5 sm:px-5 py-3.5 sm:py-4 space-y-4">
+          {/* Compact Category Switcher Pill Tabs (Centered on mobile) */}
+          <div className="w-full flex justify-center sm:justify-start">
+            <div className="inline-flex items-center gap-1 p-1 bg-[#F5EFEB] dark:bg-[#221F1E] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
               {categories.map((c) => {
                 const isSelected = selectedType === c.id;
                 const Icon = c.icon;
@@ -412,13 +421,13 @@ export const FragmentDrawer: React.FC = () => {
                     key={c.id}
                     type="button"
                     onClick={() => handleTypeSelect(c.id)}
-                    className={`px-3 py-1.5 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
+                    className={`px-3 py-1.5 sm:px-2.5 sm:py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 transition-colors ${
                       isSelected
                         ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
                         : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
                     }`}
                   >
-                    <Icon size={13} />
+                    <Icon size={12} />
                     <span>{c.label}</span>
                   </button>
                 );
@@ -426,118 +435,115 @@ export const FragmentDrawer: React.FC = () => {
             </div>
           </div>
 
-          {/* Title Input */}
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1">
-              Title / First Line
-            </label>
+          {/* Seamless Title & Content Writing Canvas */}
+          <div className="space-y-2">
             <input
               type="text"
               value={title}
               onChange={(e) => handleTitleChange(e.target.value)}
-              className="w-full font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] bg-transparent border-b border-transparent hover:border-[#E8E2D8] dark:hover:border-[#2F2B28] focus:border-[#9A3412] dark:focus:border-[#EA580C] focus:outline-none py-1 transition-colors"
+              className="w-full font-serif text-xl sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388]/65 dark:placeholder:text-[#736C62] bg-transparent border-none focus:outline-none py-0.5"
               placeholder={isCreateMode ? 'Title or first line...' : 'Untitled Fragment...'}
             />
-          </div>
 
-          {/* Full Content (NO TRUNCATION, completely readable & editable) */}
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
-              Full Content
-            </label>
+            <div className="h-px w-full bg-[#E8E2D8]/80 dark:bg-[#2F2B28]" />
+
             <textarea
               value={content}
               onChange={(e) => handleContentChange(e.target.value)}
-              rows={8}
-              className="w-full text-sm leading-relaxed p-4 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors resize-y min-h-[160px]"
+              rows={7}
+              className="w-full text-sm leading-relaxed py-1 px-0 bg-transparent border-none text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388]/65 dark:placeholder:text-[#736C62] focus:outline-none resize-y min-h-[140px] sm:min-h-[160px]"
               placeholder={
                 isCreateMode
-                  ? 'Record your observation, excerpt, quote, sensory details, or idea while fresh...'
+                  ? 'Tulis observasi, kutipan, ide, atau pikiran cepatmu di sini...'
                   : 'Write your note...'
               }
             />
           </div>
 
-          {/* Source / Context */}
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-1.5">
-              Source / Context
-            </label>
+          {/* Source & Tags (Compact Metadata Block) */}
+          <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-3">
+            {/* Source / Context */}
             <div className="relative">
-              <Quote size={13} className="absolute left-3.5 top-3 text-[#9C9388]" />
+              <Quote size={13} className="absolute left-3 top-2.5 text-[#9C9388]" />
               <input
                 type="text"
                 value={source}
                 onChange={(e) => handleSourceChange(e.target.value)}
-                placeholder="e.g. Kyoto Teramachi antiquary, Seneca Epistles..."
-                className="w-full text-xs pl-9 pr-3.5 py-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors"
+                placeholder="Source / context (e.g. Seneca Epistles, Buku, URL...)"
+                className="w-full text-xs pl-8 pr-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors"
               />
             </div>
-          </div>
 
-          {/* Tags Manager */}
-          <div>
-            <label className="block text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] mb-2">
-              Tags
-            </label>
-            <div className="flex flex-wrap items-center gap-1.5 mb-2">
-              {tagsList.map((t) => (
-                <span
-                  key={t}
-                  className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-mono bg-[#F5EFEB] dark:bg-[#272422] text-[#6B635B] dark:text-[#A8A196] border border-[#E8E2D8] dark:border-[#2F2B28]"
+            {/* Tags Manager */}
+            <div className="space-y-2">
+              {tagsList.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5">
+                  {tagsList.map((t) => (
+                    <span
+                      key={t}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded-lg text-[11px] font-mono bg-[#F5EFEB] dark:bg-[#272422] text-[#6B635B] dark:text-[#A8A196] border border-[#E8E2D8] dark:border-[#2F2B28]"
+                    >
+                      <span>#{t}</span>
+                      <button
+                        type="button"
+                        onClick={() => handleRemoveTag(t)}
+                        className="text-[#9C9388] hover:text-red-600 transition-colors"
+                        title="Remove tag"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <form onSubmit={handleAddTag} className="flex gap-1.5">
+                <div className="relative flex-1">
+                  <Tag size={13} className="absolute left-3 top-2.5 text-[#9C9388]" />
+                  <input
+                    type="text"
+                    value={tagInput}
+                    onChange={(e) => setTagInput(e.target.value)}
+                    placeholder="Add tag..."
+                    className="w-full text-xs pl-8 pr-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  className="px-2.5 py-2 bg-[#9A3412] dark:bg-[#EA580C] text-white rounded-xl text-xs hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors shrink-0 flex items-center justify-center"
+                  title="Add tag"
+                  aria-label="Add tag"
                 >
-                  <span>#{t}</span>
-                  <button
-                    type="button"
-                    onClick={() => handleRemoveTag(t)}
-                    className="text-[#9C9388] hover:text-red-600 transition-colors"
-                    title="Remove tag"
-                  >
-                    <X size={11} />
-                  </button>
-                </span>
-              ))}
-            </div>
-
-            <div className="relative">
-              <Tag size={13} className="absolute left-3.5 top-3 text-[#9C9388]" />
-              <input
-                type="text"
-                value={tagInput}
-                onChange={(e) => setTagInput(e.target.value)}
-                onKeyDown={handleAddTag}
-                placeholder="Add tag and press Enter..."
-                className="w-full text-xs pl-9 pr-3.5 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] transition-colors"
-              />
+                  <Plus size={14} />
+                </button>
+              </form>
             </div>
           </div>
 
-          {/* Connected Notes & Fragments (Bidirectional with Editor & Discover) */}
+          {/* Related Notes & Fragments (Consistent with Note Inspector) */}
           {!isCreateMode && activeFragment && (
-            <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
-              <label className="text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1.5">
+            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+              <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1.5">
                 <GitBranch size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
-                <span>Terhubung Dengan ({connectedItems.length})</span>
+                <span>Related ({connectedItems.length})</span>
               </label>
 
               {connectedItems.length === 0 ? (
                 <p className="text-xs text-[#9C9388] italic p-2.5 rounded-xl bg-white/60 dark:bg-[#221F1E]/50 border border-[#E8E2D8]/70 dark:border-[#2F2B28]/70">
-                  Belum ada catatan yang tertaut ke fragment ini.
+                  Belum ada catatan atau fragment terkait.
                 </p>
               ) : (
                 <div className="space-y-1.5">
                   {connectedItems.map((item) => (
                     <div
                       key={item.id}
-                      className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
+                      className="p-2 sm:p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 group"
                     >
                       <button
                         type="button"
                         onClick={() => {
                           if (item.kind === 'note') {
-                            closeFragmentDrawer();
-                            setActiveNoteId(item.id);
-                            setActiveView('editor');
+                            openNoteFromFragment(item.id);
                           } else {
                             openFragmentDrawer(item.id);
                           }
@@ -547,19 +553,23 @@ export const FragmentDrawer: React.FC = () => {
                         <div className="font-serif text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] truncate group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
                           {item.title}
                         </div>
-                        <span className="text-[10px] font-mono text-[#9C9388] uppercase">
-                          {item.kind === 'note' ? 'Catatan Library' : 'Fragment'} · {item.type}
+                        <span
+                          className={`text-[10px] font-mono uppercase ${
+                            item.kind === 'fragment'
+                              ? 'text-[#9A3412] dark:text-[#EA580C]'
+                              : 'text-[#9C9388]'
+                          }`}
+                        >
+                          {item.kind === 'note' ? 'Note' : 'Fragment'} · {item.type}
                         </span>
                       </button>
 
-                      <div className="flex items-center gap-1 shrink-0">
+                      <div className="flex items-center gap-0.5 shrink-0">
                         <button
                           type="button"
                           onClick={() => {
                             if (item.kind === 'note') {
-                              closeFragmentDrawer();
-                              setActiveNoteId(item.id);
-                              setActiveView('editor');
+                              openNoteFromFragment(item.id);
                             } else {
                               openFragmentDrawer(item.id);
                             }
@@ -587,7 +597,7 @@ export const FragmentDrawer: React.FC = () => {
 
           {/* Optional Vector Embedding (bge-m3) */}
           {!isCreateMode && activeFragment && (
-            <div className="pt-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+            <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
               <div className="flex items-center justify-between">
                 <label className="text-[10px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
                   <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
@@ -596,7 +606,7 @@ export const FragmentDrawer: React.FC = () => {
                 <span className="text-[10px] font-mono text-[#9C9388]">Opsional</span>
               </div>
 
-              <div className="flex items-center gap-2 pt-0.5">
+              <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={handleTriggerFragmentEmbed}
@@ -633,11 +643,11 @@ export const FragmentDrawer: React.FC = () => {
         {/* FOOTER: Distinguished only between Create Mode and View/Edit Mode         */}
         {/* ========================================================================= */}
         {isCreateMode ? (
-          <div className="px-5 sm:px-6 py-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] flex items-center justify-between shrink-0">
+          <div className="px-3.5 sm:px-5 py-2.5 sm:py-3.5 border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] flex items-center justify-between shrink-0">
             <button
               type="button"
               onClick={closeFragmentDrawer}
-              className="px-3.5 py-2 text-xs text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors"
+              className="px-3 py-2 text-xs text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] transition-colors"
             >
               Cancel
             </button>
@@ -646,7 +656,7 @@ export const FragmentDrawer: React.FC = () => {
               type="button"
               onClick={() => handleCreateSubmit()}
               disabled={!title.trim() && !content.trim()}
-              className="px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-50 transition-colors shadow-xs flex items-center gap-1.5"
+              className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-50 transition-colors shadow-xs flex items-center gap-1.5"
             >
               {isSavedNotice ? (
                 <>
@@ -664,14 +674,14 @@ export const FragmentDrawer: React.FC = () => {
         ) : (
           <div className="border-t border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/50 dark:bg-[#1E1C1A] shrink-0">
             {promoteError && (
-              <div className="mx-5 sm:mx-6 mt-3 p-2.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
+              <div className="mx-3.5 sm:mx-5 mt-2.5 p-2.5 rounded-xl bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 text-xs text-red-700 dark:text-red-300 flex items-start gap-2">
                 <AlertCircle size={14} className="shrink-0 mt-0.5" />
                 <span>{promoteError}</span>
               </div>
             )}
 
             {showPromoteConfirm ? (
-              <div className="px-5 sm:px-6 py-3.5 space-y-3">
+              <div className="px-3.5 sm:px-5 py-3 space-y-2.5">
                 <div className="text-xs leading-relaxed text-[#221F1D] dark:text-[#EDE8E1]">
                   <span className="font-semibold">Naikkan pangkat menjadi Note?</span>{' '}
                   <span className="text-[#6B635B] dark:text-[#A8A196]">
@@ -712,7 +722,7 @@ export const FragmentDrawer: React.FC = () => {
                 </div>
               </div>
             ) : (
-              <div className="px-5 sm:px-6 py-4 flex items-center justify-between gap-2">
+              <div className="px-3.5 sm:px-5 py-2.5 sm:py-3.5 flex items-center justify-between gap-2">
                 <button
                   type="button"
                   onClick={() => {
@@ -745,9 +755,9 @@ export const FragmentDrawer: React.FC = () => {
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={() => {
           if (activeFragment) {
-            deleteFragment(activeFragment.id);
+            const targetId = activeFragment.id;
             setShowDeleteConfirm(false);
-            closeFragmentDrawer();
+            deleteFragment(targetId);
           }
         }}
         itemType="fragment"

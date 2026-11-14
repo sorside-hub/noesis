@@ -1,13 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { useNoesis } from '../context/NoesisContext';
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
+import { useBackOverlay } from '../hooks/useBackOverlay';
 import { ViewMode } from '../types';
 import { Compass, Feather, BookOpen, FolderKanban, Sparkles, Edit3, X } from 'lucide-react';
 
 export const MobileNav: React.FC = () => {
-  const { activeView, setActiveView, openFragmentDrawer, createNote, setActiveNoteId } = useNoesis();
+  const { activeView, setActiveView, selectTab, openFragmentDrawer, createNote, setActiveNoteId } = useNoesis();
   const isKeyboardOpen = useVirtualKeyboardOpen();
   const [isFabMenuOpen, setIsFabMenuOpen] = useState(false);
+
+  useBackOverlay(isFabMenuOpen && !isKeyboardOpen, () => setIsFabMenuOpen(false), 'mobile-fab-menu');
 
   // Tutup speed dial saat virtual keyboard muncul atau halaman berganti
   useEffect(() => {
@@ -117,7 +120,7 @@ export const MobileNav: React.FC = () => {
           return (
             <button
               key={item.view}
-              onClick={() => setActiveView(item.view)}
+              onClick={() => selectTab(item.view)}
               className={`flex flex-col items-center justify-center gap-1 py-1 px-2.5 rounded-lg transition-colors ${
                 isActive
                   ? 'text-[#9A3412] dark:text-[#EA580C] font-medium'

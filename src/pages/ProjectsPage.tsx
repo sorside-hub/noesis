@@ -1,5 +1,7 @@
 import React, { useState } from 'react';
 import { useNoesis } from '../context/NoesisContext';
+import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 import {
   FolderKanban,
   Plus,
@@ -13,6 +15,7 @@ import {
 } from 'lucide-react';
 
 export const ProjectsPage: React.FC = () => {
+  const scrollRef = useScrollRestoration<HTMLDivElement>('projects');
   const {
     projects,
     toggleProjectMilestone,
@@ -22,6 +25,7 @@ export const ProjectsPage: React.FC = () => {
   } = useNoesis();
 
   const [showCreateModal, setShowCreateModal] = useState(false);
+  useBackOverlay(showCreateModal, () => setShowCreateModal(false), 'projects-create-modal');
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [targetWordCount, setTargetWordCount] = useState(3000);
@@ -50,7 +54,7 @@ export const ProjectsPage: React.FC = () => {
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-6 sm:px-10 lg:px-14 py-8">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-6 sm:px-10 lg:px-14 py-8">
       <div className="max-w-5xl mx-auto space-y-10">
         {/* Header */}
         <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-6 flex flex-col sm:flex-row sm:items-end justify-between gap-4">

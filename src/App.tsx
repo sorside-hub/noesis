@@ -16,12 +16,14 @@ import { PWAInstallButton } from './components/PWAInstallButton';
 import { AuthScreen } from './components/AuthScreen';
 import { SafetyConfirmModal } from './components/SafetyConfirmModal';
 import { useVirtualKeyboardOpen } from './hooks/useVirtualKeyboardOpen';
+import { useBackOverlay } from './hooks/useBackOverlay';
 import { Menu, Sun, Moon, Monitor, Settings as SettingsIcon, Loader2, CheckCircle2 } from 'lucide-react';
 
 const WorkspaceShell: React.FC = () => {
   const {
     activeView,
     setActiveView,
+    selectTab,
     isMobileDrawerOpen,
     setIsMobileDrawerOpen,
     theme,
@@ -30,8 +32,13 @@ const WorkspaceShell: React.FC = () => {
     authLoading,
     offlineBypass,
     autoSyncNotice,
+    safetyModalAction,
+    closeSafetyModal,
   } = useNoesis();
   const isKeyboardOpen = useVirtualKeyboardOpen();
+
+  useBackOverlay(isMobileDrawerOpen, () => setIsMobileDrawerOpen(false), 'mobile-sidebar-drawer');
+  useBackOverlay(Boolean(safetyModalAction), closeSafetyModal, 'safety-confirm-modal');
 
   const cycleTheme = () => {
     if (theme === 'light') setTheme('dark');
@@ -92,7 +99,7 @@ const WorkspaceShell: React.FC = () => {
               <Menu size={20} />
             </button>
             <span
-              onClick={() => setActiveView('home')}
+              onClick={() => selectTab('home')}
               className="font-serif text-xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1] cursor-pointer"
             >
               Noesis
@@ -116,7 +123,7 @@ const WorkspaceShell: React.FC = () => {
               <span>{theme === 'system' ? 'Auto' : theme === 'dark' ? 'Dark' : 'Light'}</span>
             </button>
             <button
-              onClick={() => setActiveView('settings')}
+              onClick={() => selectTab('settings')}
               className={`p-1.5 rounded-lg transition-colors ${
                 activeView === 'settings'
                   ? 'text-[#9A3412] dark:text-[#EA580C] bg-white dark:bg-[#272422]'

@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback } from 'react';
 import { useNoesis } from '../context/NoesisContext';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 import {
   Note,
   Fragment,
@@ -84,6 +85,7 @@ const getTypeBadgeClass = (type: NoteType | FragmentType) => {
 };
 
 export const HomePage: React.FC = () => {
+  const scrollRef = useScrollRestoration<HTMLDivElement>('home');
   const {
     notes,
     fragments,
@@ -296,7 +298,7 @@ export const HomePage: React.FC = () => {
   const isWorkspaceEmpty = activeNotes.length === 0 && fragments.length === 0;
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-10 lg:px-14 py-3 sm:py-8">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-10 lg:px-14 py-3 sm:py-8">
       <div className="max-w-5xl mx-auto space-y-4 sm:space-y-8">
         {/* Clean Editorial Header (Tanpa Tombol New/Capture, Tanpa Statistik) */}
         <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3 sm:pb-5">

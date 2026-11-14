@@ -4,6 +4,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
 import Link from '@tiptap/extension-link';
 import { useNoesis } from '../../context/NoesisContext';
+import { useBackOverlay } from '../../hooks/useBackOverlay';
 import {
   DiscoverSourceItem,
   SynthesisResult,
@@ -74,6 +75,7 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({ incoming
 
   // Manual Picker Drawer / Panel State
   const [isManualPickerOpen, setIsManualPickerOpen] = useState(false);
+  useBackOverlay(isManualPickerOpen, () => setIsManualPickerOpen(false), 'discover-manual-picker');
   const [manualFilterText, setManualFilterText] = useState('');
   const [manualKindFilter, setManualKindFilter] = useState<'all' | 'note' | 'fragment'>('all');
 

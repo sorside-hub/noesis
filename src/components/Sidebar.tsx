@@ -27,6 +27,7 @@ export const Sidebar: React.FC = () => {
   const {
     activeView,
     setActiveView,
+    selectTab,
     activeNotebookId,
     setActiveNotebookId,
     notes,
@@ -63,7 +64,7 @@ export const Sidebar: React.FC = () => {
       <aside className="w-16 border-r border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB] dark:bg-[#1A1817] flex flex-col items-center py-4 justify-between h-full shrink-0 select-none transition-all">
         <div className="flex flex-col items-center gap-4 w-full">
           <button
-            onClick={() => setActiveView('home')}
+            onClick={() => selectTab('home')}
             className="w-10 h-10 rounded-xl bg-[#FAF7F2] dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#332F2C] flex items-center justify-center font-serif text-lg font-bold text-[#9A3412] dark:text-[#EA580C]"
             title="Noesis"
           >
@@ -88,7 +89,7 @@ export const Sidebar: React.FC = () => {
               return (
                 <button
                   key={item.view}
-                  onClick={() => setActiveView(item.view)}
+                  onClick={() => selectTab(item.view)}
                   title={item.label}
                   className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
                     isActive
@@ -151,7 +152,7 @@ export const Sidebar: React.FC = () => {
         {/* Brand Header */}
         <div className="flex items-center justify-between">
           <div
-            onClick={() => setActiveView('home')}
+            onClick={() => selectTab('home')}
             className="cursor-pointer group"
           >
             <h1 className="font-serif text-2xl tracking-tight font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
@@ -203,12 +204,7 @@ export const Sidebar: React.FC = () => {
             return (
               <button
                 key={item.view}
-                onClick={() => {
-                  setActiveView(item.view);
-                  if (item.view === 'library') {
-                    setActiveNotebookId(null);
-                  }
-                }}
+                onClick={() => selectTab(item.view)}
                 className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium transition-colors ${
                   isActive
                     ? 'bg-white dark:bg-[#272422] text-[#221F1D] dark:text-[#EDE8E1] shadow-xs'

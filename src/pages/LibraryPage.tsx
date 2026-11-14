@@ -24,8 +24,11 @@ import {
   Sparkles,
 } from 'lucide-react';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
+import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 
 export const LibraryPage: React.FC = () => {
+  const scrollRef = useScrollRestoration<HTMLDivElement>('library');
   const {
     notes,
     setActiveNoteId,
@@ -38,19 +41,63 @@ export const LibraryPage: React.FC = () => {
     setIsSemanticSearch,
     semanticThreshold,
     performSemanticNoteSearch,
+    libraryViewPrefs,
+    setLibraryViewPrefs,
   } = useNoesis();
 
-  const [search, setSearch] = useState('');
-  const [selectedType, setSelectedType] = useState<string>('all');
-  const [selectedTag, setSelectedTag] = useState<string | null>(null);
-  const [viewLayout, setViewLayout] = useState<'grid' | 'list'>('grid');
-  const [sortBy, setSortBy] = useState<'updated' | 'created' | 'alpha'>('updated');
-  const [showArchivedOnly, setShowArchivedOnly] = useState(false);
-  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
+  const {
+    search,
+    selectedType,
+    selectedTag,
+    viewLayout,
+    sortBy,
+    showArchivedOnly,
+    showFavoritesOnly,
+  } = libraryViewPrefs;
+
+  const setSearch = (val: string) =>
+    setLibraryViewPrefs((prev) => ({ ...prev, search: val }));
+  const setSelectedType = (val: string) =>
+    setLibraryViewPrefs((prev) => ({ ...prev, selectedType: val }));
+  const setSelectedTag = (val: string | null) =>
+    setLibraryViewPrefs((prev) => ({ ...prev, selectedTag: val }));
+  const setViewLayout = (val: 'grid' | 'list') =>
+    setLibraryViewPrefs((prev) => ({ ...prev, viewLayout: val }));
+  const setSortBy = (val: 'updated' | 'created' | 'alpha') =>
+    setLibraryViewPrefs((prev) => ({ ...prev, sortBy: val }));
+  const setShowArchivedOnly = (val: React.SetStateAction<boolean>) =>
+    setLibraryViewPrefs((prev) => ({
+      ...prev,
+      showArchivedOnly: typeof val === 'function' ? val(prev.showArchivedOnly) : val,
+    }));
+  const setShowFavoritesOnly = (val: React.SetStateAction<boolean>) =>
+    setLibraryViewPrefs((prev) => ({
+      ...prev,
+      showFavoritesOnly: typeof val === 'function' ? val(prev.showFavoritesOnly) : val,
+    }));
+
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [noteIdToDelete, setNoteIdToDelete] = useState<string | null>(null);
   const mobileSearchRef = useRef<HTMLDivElement>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement>(null);
+
+  useBackOverlay(Boolean(noteIdToDelete), () => setNoteIdToDelete(null), 'library-delete-modal');
+  useBackOverlay(isFilterDropdownOpen, () => setIsFilterDropdownOpen(false), 'library-filter-dropdown');
+  useBackOverlay(
+    isMobileSearchOpen,
+    () => {
+      setSearch('');
+      setIsMobileSearchOpen(false);
+    },
+    'library-mobile-search'
+  );
+
+  useEffect(() => {
+    if (isMobileSearchOpen) {
+      mobileSearchInputRef.current?.focus();
+    }
+  }, [isMobileSearchOpen]);
 
   // Close mobile search box when input is empty and user clicks outside
   useEffect(() => {
@@ -246,6 +293,7 @@ export const LibraryPage: React.FC = () => {
 
   return (
     <div
+      ref={scrollRef}
       className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8"
       onClick={() => {
         setIsFilterDropdownOpen(false);
@@ -447,11 +495,11 @@ export const LibraryPage: React.FC = () => {
               <div ref={mobileSearchRef} className="relative flex items-center">
                 <Search size={15} className="absolute left-3 text-[#9C9388] pointer-events-none" />
                 <input
+                  ref={mobileSearchInputRef}
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder={isSemanticSearch ? "Cari makna..." : "Search notes..."}
-                  autoFocus
                   className="w-full h-[36px] text-xs pl-8 pr-20 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#9A3412] dark:border-[#EA580C] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none"
                 />
                 <div className="absolute right-2 flex items-center gap-1">

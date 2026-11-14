@@ -15,24 +15,64 @@ import {
   Check,
 } from 'lucide-react';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
+import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useScrollRestoration } from '../hooks/useScrollRestoration';
 
 export const FragmentsPage: React.FC = () => {
+  const scrollRef = useScrollRestoration<HTMLDivElement>('fragments');
   const {
     fragments,
     deleteFragment,
     toggleStarFragment,
     openFragmentDrawer,
+    fragmentsViewPrefs,
+    setFragmentsViewPrefs,
   } = useNoesis();
 
-  const [search, setSearch] = useState('');
-  const [selectedType, setSelectedType] = useState<string>('all');
-  const [showFavoritesOnly, setShowFavoritesOnly] = useState(false);
-  const [sortBy, setSortBy] = useState<'recent' | 'alpha'>('recent');
-  const [viewMode, setViewMode] = useState<'grid' | 'list'>('grid');
+  const {
+    search,
+    selectedType,
+    showFavoritesOnly,
+    sortBy,
+    viewMode,
+  } = fragmentsViewPrefs;
+
+  const setSearch = (val: string) =>
+    setFragmentsViewPrefs((prev) => ({ ...prev, search: val }));
+  const setSelectedType = (val: string) =>
+    setFragmentsViewPrefs((prev) => ({ ...prev, selectedType: val }));
+  const setShowFavoritesOnly = (val: React.SetStateAction<boolean>) =>
+    setFragmentsViewPrefs((prev) => ({
+      ...prev,
+      showFavoritesOnly: typeof val === 'function' ? val(prev.showFavoritesOnly) : val,
+    }));
+  const setSortBy = (val: 'recent' | 'alpha') =>
+    setFragmentsViewPrefs((prev) => ({ ...prev, sortBy: val }));
+  const setViewMode = (val: 'grid' | 'list') =>
+    setFragmentsViewPrefs((prev) => ({ ...prev, viewMode: val }));
+
   const [isFilterDropdownOpen, setIsFilterDropdownOpen] = useState(false);
   const [isMobileSearchOpen, setIsMobileSearchOpen] = useState(false);
   const [fragmentIdToDelete, setFragmentIdToDelete] = useState<string | null>(null);
   const mobileSearchRef = useRef<HTMLDivElement>(null);
+  const mobileSearchInputRef = useRef<HTMLInputElement>(null);
+
+  useBackOverlay(Boolean(fragmentIdToDelete), () => setFragmentIdToDelete(null), 'fragments-delete-modal');
+  useBackOverlay(isFilterDropdownOpen, () => setIsFilterDropdownOpen(false), 'fragments-filter-dropdown');
+  useBackOverlay(
+    isMobileSearchOpen,
+    () => {
+      setSearch('');
+      setIsMobileSearchOpen(false);
+    },
+    'fragments-mobile-search'
+  );
+
+  useEffect(() => {
+    if (isMobileSearchOpen) {
+      mobileSearchInputRef.current?.focus();
+    }
+  }, [isMobileSearchOpen]);
 
   // Close mobile search box when input is empty and user clicks outside
   useEffect(() => {
@@ -127,6 +167,7 @@ export const FragmentsPage: React.FC = () => {
 
   return (
     <div
+      ref={scrollRef}
       className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-8 lg:px-14 py-3 sm:py-8"
       onClick={() => setIsFilterDropdownOpen(false)}
     >
@@ -285,11 +326,11 @@ export const FragmentsPage: React.FC = () => {
               <div ref={mobileSearchRef} className="relative flex items-center">
                 <Search size={15} className="absolute left-3.5 text-[#9C9388] pointer-events-none" />
                 <input
+                  ref={mobileSearchInputRef}
                   type="text"
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   placeholder="Search fragments..."
-                  autoFocus
                   className="w-full h-[36px] text-xs pl-9 pr-10 rounded-xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#9A3412] dark:border-[#EA580C] text-[#221F1D] dark:text-[#EDE8E1] placeholder:text-[#9C9388] focus:outline-none"
                 />
                 <button
