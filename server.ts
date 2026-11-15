@@ -10,6 +10,8 @@ import {
   synthesizeWithGemini,
   analyzeConnectionWithGemini,
   summarizeClusterWithGemini,
+  suggestTagsWithGemini,
+  assistWritingWithGemini,
 } from './shared/geminiDiscover.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -123,6 +125,34 @@ async function startServer() {
       return res.status(err?.status || 500).json({
         success: false,
         error: err?.message || 'Gagal merangkum tema cluster.',
+      });
+    }
+  });
+
+  // 4. AI TAG SUGGESTIONS ENDPOINT (Notes & Fragments)
+  app.post('/api/ai/suggest-tags', async (req: Request, res: Response) => {
+    try {
+      const payload = await suggestTagsWithGemini(process.env.GEMINI_API_KEY, req.body);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('Error in /api/ai/suggest-tags:', err);
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.message || 'Gagal membuat saran tag AI.',
+      });
+    }
+  });
+
+  // 5. AI INLINE WRITING COMPANION ENDPOINT (Notes & Projects)
+  app.post('/api/ai/writing-assist', async (req: Request, res: Response) => {
+    try {
+      const payload = await assistWritingWithGemini(process.env.GEMINI_API_KEY, req.body);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('Error in /api/ai/writing-assist:', err);
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.message || 'Gagal memproses pendamping AI.',
       });
     }
   });

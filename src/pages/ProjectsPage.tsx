@@ -246,6 +246,13 @@ export const ProjectsPage: React.FC = () => {
     return sortedSections[0];
   }, [sortedSections, activeSectionId]);
 
+  const previousSectionSnippet = useMemo(() => {
+    if (!activeSection || sortedSections.length < 2) return undefined;
+    const idx = sortedSections.findIndex((s) => s.id === activeSection.id);
+    if (idx <= 0) return undefined;
+    return sortedSections[idx - 1]?.content;
+  }, [sortedSections, activeSection]);
+
   // Reset ephemeral workspace UI when switching active project
   useEffect(() => {
     setDesktopLeftTab('sections');
@@ -1085,6 +1092,8 @@ export const ProjectsPage: React.FC = () => {
                   onToggleStatus={toggleProjectSectionStatus}
                   onFlushSave={flushProjectSave}
                   insertRequest={insertRequest}
+                  projectTitle={activeProject.title}
+                  previousSectionSnippet={previousSectionSnippet}
                 />
               ) : (
                 <div className="h-full flex flex-col items-center justify-center text-center p-8 rounded-2xl bg-white/70 dark:bg-[#1E1C1A]/60 border border-dashed border-[#D6CEBE] dark:border-[#332F2C] space-y-3">
@@ -1231,6 +1240,8 @@ export const ProjectsPage: React.FC = () => {
                 setIsMobileEditorOpen(false);
               }}
               insertRequest={insertRequest}
+              projectTitle={activeProject.title}
+              previousSectionSnippet={previousSectionSnippet}
             />
           </div>
         )}

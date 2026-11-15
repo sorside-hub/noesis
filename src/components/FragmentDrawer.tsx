@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { useNoesis } from '../context/NoesisContext';
-import { FragmentType } from '../types';
+import { FragmentType, TagSuggestionResult } from '../types';
 import {
   X,
   Feather,
@@ -23,6 +23,12 @@ import {
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { useBackOverlay } from '../hooks/useBackOverlay';
 import { useScrollRestoration } from '../hooks/useScrollRestoration';
+import {
+  collectWorkspaceTags,
+  requestSuggestTags,
+  MAX_AI_TAGS_PER_ITEM,
+} from '../lib/discoverAi';
+import { TagSuggestionsPanel } from './TagSuggestionsPanel';
 
 export const FragmentDrawer: React.FC = () => {
   const {
@@ -66,6 +72,14 @@ export const FragmentDrawer: React.FC = () => {
   const [showPromoteConfirm, setShowPromoteConfirm] = useState(false);
   const [isPromoting, setIsPromoting] = useState(false);
   const [promoteError, setPromoteError] = useState<string | null>(null);
+  const [isSuggestingTags, setIsSuggestingTags] = useState(false);
+  const [tagSuggestError, setTagSuggestError] = useState<string | null>(null);
+  const [tagSuggestResult, setTagSuggestResult] = useState<TagSuggestionResult | null>(null);
+  const [pendingTagSuggestions, setPendingTagSuggestions] = useState<string[]>([]);
+
+  const drawerSessionKey = `${isFragmentDrawerOpen}:${activeFragmentId || 'new'}`;
+  const drawerSessionKeyRef = useRef(drawerSessionKey);
+  drawerSessionKeyRef.current = drawerSessionKey;
 
   useBackOverlay(showDeleteConfirm, () => setShowDeleteConfirm(false), 'fragment-delete-modal');
   useBackOverlay(
@@ -152,10 +166,17 @@ export const FragmentDrawer: React.FC = () => {
     setShowPromoteConfirm(false);
     setIsPromoting(false);
     setPromoteError(null);
+    setIsSuggestingTags(false);
+    setTagSuggestError(null);
+    setTagSuggestResult(null);
+    setPendingTagSuggestions([]);
     // Intentionally depend on [activeFragmentId, isFragmentDrawerOpen] (not [activeFragment])
     // so live typing or background sync updates never overwrite cursor / input state.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFragmentId, isFragmentDrawerOpen]);
+
+  const workspaceTags = useMemo(() => collectWorkspaceTags(notes, fragments, 100), [notes, fragments]);
+  const workspaceTagSet = useMemo(() => new Set(workspaceTags), [workspaceTags]);
 
   if (!isFragmentDrawerOpen) return null;
 
@@ -240,6 +261,7 @@ export const FragmentDrawer: React.FC = () => {
     if (cleaned && !tagsList.includes(cleaned)) {
       const nextTags = [...tagsList, cleaned];
       setTagsList(nextTags);
+      setPendingTagSuggestions((prev) => prev.filter((t) => t !== cleaned));
       if (!isCreateMode && activeFragment) {
         updateFragment(activeFragment.id, { tags: nextTags });
       }
@@ -253,6 +275,77 @@ export const FragmentDrawer: React.FC = () => {
     if (!isCreateMode && activeFragment) {
       updateFragment(activeFragment.id, { tags: nextTags });
     }
+  };
+
+  const handleSuggestTags = async () => {
+    if (isSuggestingTags) return;
+    setTagSuggestError(null);
+
+    if (tagsList.length >= MAX_AI_TAGS_PER_ITEM) {
+      setTagSuggestError(
+        `Tag sudah mencapai batas ideal (${MAX_AI_TAGS_PER_ITEM} tag). Hapus salah satu tag jika ingin saran baru.`
+      );
+      return;
+    }
+
+    const requestKey = drawerSessionKey;
+    setIsSuggestingTags(true);
+    try {
+      const res = await requestSuggestTags({
+        kind: 'fragment',
+        title,
+        content,
+        source,
+        itemType: selectedType,
+        currentTags: tagsList,
+        existingTags: workspaceTags,
+        maxSuggestions: Math.min(3, MAX_AI_TAGS_PER_ITEM - tagsList.length),
+        maxTotalTags: MAX_AI_TAGS_PER_ITEM,
+      });
+
+      if (drawerSessionKeyRef.current !== requestKey) return;
+
+      const existingSet = new Set(tagsList.map((t) => t.toLowerCase()));
+      const filtered = (res.suggestedTags || []).filter((t) => !existingSet.has(t.toLowerCase()));
+      setTagSuggestResult(res);
+      setPendingTagSuggestions(filtered);
+    } catch (err: any) {
+      if (drawerSessionKeyRef.current !== requestKey) return;
+      setTagSuggestError(err?.message || 'Gagal meminta saran tag AI.');
+    } finally {
+      if (drawerSessionKeyRef.current === requestKey) {
+        setIsSuggestingTags(false);
+      }
+    }
+  };
+
+  const handleApplySuggestedTag = (tag: string) => {
+    if (!tagsList.includes(tag)) {
+      const nextTags = [...tagsList, tag];
+      setTagsList(nextTags);
+      if (!isCreateMode && activeFragment) {
+        updateFragment(activeFragment.id, { tags: nextTags });
+      }
+    }
+    setPendingTagSuggestions((prev) => prev.filter((t) => t !== tag));
+  };
+
+  const handleApplyAllSuggestedTags = () => {
+    if (pendingTagSuggestions.length === 0) return;
+    const nextTags = [...tagsList];
+    for (const tag of pendingTagSuggestions) {
+      if (!nextTags.includes(tag)) nextTags.push(tag);
+    }
+    setTagsList(nextTags);
+    if (!isCreateMode && activeFragment) {
+      updateFragment(activeFragment.id, { tags: nextTags });
+    }
+    setPendingTagSuggestions([]);
+  };
+
+  const handleDismissTagSuggestions = () => {
+    setTagSuggestResult(null);
+    setPendingTagSuggestions([]);
   };
 
   // Submit in Create Mode
@@ -511,7 +604,7 @@ export const FragmentDrawer: React.FC = () => {
               )}
 
               <form onSubmit={handleAddTag} className="flex gap-1.5">
-                <div className="relative flex-1">
+                <div className="relative flex-1 min-w-0">
                   <Tag size={13} className="absolute left-3 top-2.5 text-[#9C9388]" />
                   <input
                     type="text"
@@ -529,7 +622,33 @@ export const FragmentDrawer: React.FC = () => {
                 >
                   <Plus size={14} />
                 </button>
+                <button
+                  type="button"
+                  onClick={handleSuggestTags}
+                  disabled={isSuggestingTags}
+                  title="Saran tag dengan AI"
+                  aria-label="Saran tag dengan AI"
+                  className="px-2.5 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#9A3412] dark:text-[#EA580C] hover:border-[#9A3412] dark:hover:border-[#EA580C] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors shrink-0 flex items-center justify-center cursor-pointer"
+                >
+                  {isSuggestingTags ? (
+                    <Loader2 size={14} className="animate-spin" />
+                  ) : (
+                    <Sparkles size={14} />
+                  )}
+                </button>
               </form>
+
+              <TagSuggestionsPanel
+                error={tagSuggestError}
+                result={tagSuggestResult}
+                pendingTags={pendingTagSuggestions}
+                existingWorkspaceTags={workspaceTagSet}
+                onApplyTag={handleApplySuggestedTag}
+                onApplyAll={handleApplyAllSuggestedTags}
+                onDismiss={handleDismissTagSuggestions}
+                onDismissError={() => setTagSuggestError(null)}
+                overlayKey={`fragment-tags-ai-${activeFragmentId || 'new'}`}
+              />
             </div>
           </div>
 

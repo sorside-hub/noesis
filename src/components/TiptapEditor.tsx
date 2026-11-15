@@ -5,7 +5,7 @@ import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
 import { useNoesis } from '../context/NoesisContext';
-import { ManualNoteType, NoteType } from '../types';
+import { ManualNoteType, NoteType, TagSuggestionResult, WritingAssistAction } from '../types';
 import {
   Bold,
   Italic,
@@ -35,10 +35,29 @@ import {
   Sparkles,
   Database,
   Feather,
+  Loader2,
+  Undo2,
+  Redo2,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { fetchAllVectorEmbeddings, VectorMapResult } from '../lib/supabase';
-import { computeRelatedNoteSuggestions } from '../lib/discoverAi';
+import {
+  computeRelatedNoteSuggestions,
+  collectWorkspaceTags,
+  requestSuggestTags,
+  MAX_AI_TAGS_PER_ITEM,
+} from '../lib/discoverAi';
+import { TagSuggestionsPanel } from './TagSuggestionsPanel';
+import {
+  EditorAiSheet,
+  SlashCommandMenu,
+  SlashCommandItem,
+  SlashTriggerMatch,
+  EditorAiSnapshot,
+  captureEditorAiSnapshot,
+  applyAiHtmlToEditor,
+  detectSlashCommandTrigger,
+} from './EditorAiAssistant';
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
 import { useBackOverlay } from '../hooks/useBackOverlay';
 import { useScrollRestoration } from '../hooks/useScrollRestoration';
@@ -133,6 +152,18 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [searchRelatedQuery, setSearchRelatedQuery] = useState('');
   const [showLinkSearchDropdown, setShowLinkSearchDropdown] = useState(false);
   const [vectorMap, setVectorMap] = useState<VectorMapResult | null>(null);
+  const [isSuggestingTags, setIsSuggestingTags] = useState(false);
+  const [tagSuggestError, setTagSuggestError] = useState<string | null>(null);
+  const [tagSuggestResult, setTagSuggestResult] = useState<TagSuggestionResult | null>(null);
+  const [pendingTagSuggestions, setPendingTagSuggestions] = useState<string[]>([]);
+  const [showAiSheet, setShowAiSheet] = useState(false);
+  const [aiSnapshot, setAiSnapshot] = useState<EditorAiSnapshot | null>(null);
+  const [aiAutoRunAction, setAiAutoRunAction] = useState<WritingAssistAction | null>(null);
+  const [slashTrigger, setSlashTrigger] = useState<SlashTriggerMatch | null>(null);
+  const [desktopSelectionCoords, setDesktopSelectionCoords] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
 
   useBackOverlay(showMobileInspector, () => setShowMobileInspector(false), 'tiptap-mobile-inspector');
   useBackOverlay(showDeleteModal, () => setShowDeleteModal(false), 'tiptap-delete-modal');
@@ -160,6 +191,15 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setInspectorTab('metadata');
     setShowLinkSearchDropdown(false);
     setSearchRelatedQuery('');
+    setIsSuggestingTags(false);
+    setTagSuggestError(null);
+    setTagSuggestResult(null);
+    setPendingTagSuggestions([]);
+    setShowAiSheet(false);
+    setAiSnapshot(null);
+    setAiAutoRunAction(null);
+    setSlashTrigger(null);
+    setDesktopSelectionCoords(null);
   }, [activeNote?.id]);
 
   const clipboardProps = useMemo(
@@ -213,10 +253,28 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       blurTimeoutRef.current = setTimeout(() => {
         if (!ed.isDestroyed && !ed.isFocused) {
           setIsEditorFocused(false);
+          setDesktopSelectionCoords(null);
         }
       }, 120);
     },
+    onSelectionUpdate: ({ editor: ed }) => {
+      setSlashTrigger(detectSlashCommandTrigger(ed));
+      if (!ed.state.selection.empty) {
+        try {
+          const coords = ed.view.coordsAtPos(ed.state.selection.from);
+          setDesktopSelectionCoords({ left: coords.left, top: coords.top });
+        } catch {
+          setDesktopSelectionCoords(null);
+        }
+      } else {
+        setDesktopSelectionCoords(null);
+      }
+    },
     onUpdate: ({ editor }) => {
+      setSlashTrigger(detectSlashCommandTrigger(editor));
+      if (editor.state.selection.empty) {
+        setDesktopSelectionCoords(null);
+      }
       const currentId = activeNoteIdRef.current;
       if (currentId) {
         const html = editor.getHTML();
@@ -228,6 +286,56 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       }
     },
   });
+
+  useEffect(() => {
+    if (!slashTrigger) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSlashTrigger(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [slashTrigger]);
+
+  const openAiAssistant = useCallback(
+    (autoAction?: WritingAssistAction | null) => {
+      if (!editor || editor.isDestroyed) return;
+      const snapshot = captureEditorAiSnapshot(editor);
+      setSlashTrigger(null);
+      setDesktopSelectionCoords(null);
+      setAiSnapshot(snapshot);
+      setAiAutoRunAction(autoAction ?? null);
+      setShowAiSheet(true);
+      editor.commands.blur();
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    },
+    [editor]
+  );
+
+  const handleSlashSelect = useCallback(
+    (item: SlashCommandItem) => {
+      if (!editor || editor.isDestroyed || !slashTrigger) return;
+      editor
+        .chain()
+        .focus()
+        .deleteRange({ from: slashTrigger.from, to: slashTrigger.to })
+        .run();
+      const snapshot = captureEditorAiSnapshot(editor);
+      setSlashTrigger(null);
+      setDesktopSelectionCoords(null);
+      setAiSnapshot(snapshot);
+      setAiAutoRunAction(item.action === 'open_prompt' ? null : item.action);
+      setShowAiSheet(true);
+      editor.commands.blur();
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    },
+    [editor, slashTrigger]
+  );
 
   // When activeNote changes externally, update editor content
   useEffect(() => {
@@ -331,12 +439,16 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setShowActionMenu(false);
   };
 
+  const workspaceTags = useMemo(() => collectWorkspaceTags(notes, fragments, 100), [notes, fragments]);
+  const workspaceTagSet = useMemo(() => new Set(workspaceTags), [workspaceTags]);
+
   const handleAddTag = (e: React.FormEvent) => {
     e.preventDefault();
     if (!activeNote || !newTagInput.trim()) return;
     const cleanTag = newTagInput.trim().toLowerCase().replace(/^#/, '');
-    if (!activeNote.tags.includes(cleanTag)) {
+    if (cleanTag && !activeNote.tags.includes(cleanTag)) {
       updateNote(activeNote.id, { tags: [...activeNote.tags, cleanTag] });
+      setPendingTagSuggestions((prev) => prev.filter((t) => t !== cleanTag));
     }
     setNewTagInput('');
   };
@@ -346,6 +458,73 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     updateNote(activeNote.id, {
       tags: activeNote.tags.filter((t) => t !== tagToRemove),
     });
+  };
+
+  const handleSuggestTags = async () => {
+    if (!activeNote || isSuggestingTags) return;
+    setTagSuggestError(null);
+
+    if (activeNote.tags.length >= MAX_AI_TAGS_PER_ITEM) {
+      setTagSuggestError(
+        `Tag sudah mencapai batas ideal (${MAX_AI_TAGS_PER_ITEM} tag). Hapus salah satu tag jika ingin saran baru.`
+      );
+      return;
+    }
+
+    const targetNoteId = activeNote.id;
+    const currentHtml = editor ? editor.getHTML() : activeNote.content;
+
+    setIsSuggestingTags(true);
+    try {
+      const res = await requestSuggestTags({
+        kind: 'note',
+        title,
+        content: currentHtml,
+        source: sourceInput,
+        itemType: activeNote.type,
+        currentTags: activeNote.tags,
+        existingTags: workspaceTags,
+        maxSuggestions: Math.min(3, MAX_AI_TAGS_PER_ITEM - activeNote.tags.length),
+        maxTotalTags: MAX_AI_TAGS_PER_ITEM,
+      });
+
+      if (activeNoteIdRef.current !== targetNoteId) return;
+
+      const existingSet = new Set(activeNote.tags.map((t) => t.toLowerCase()));
+      const filtered = (res.suggestedTags || []).filter((t) => !existingSet.has(t.toLowerCase()));
+      setTagSuggestResult(res);
+      setPendingTagSuggestions(filtered);
+    } catch (err: any) {
+      if (activeNoteIdRef.current !== targetNoteId) return;
+      setTagSuggestError(err?.message || 'Gagal meminta saran tag AI.');
+    } finally {
+      if (activeNoteIdRef.current === targetNoteId) {
+        setIsSuggestingTags(false);
+      }
+    }
+  };
+
+  const handleApplySuggestedTag = (tag: string) => {
+    if (!activeNote) return;
+    if (!activeNote.tags.includes(tag)) {
+      updateNote(activeNote.id, { tags: [...activeNote.tags, tag] });
+    }
+    setPendingTagSuggestions((prev) => prev.filter((t) => t !== tag));
+  };
+
+  const handleApplyAllSuggestedTags = () => {
+    if (!activeNote || pendingTagSuggestions.length === 0) return;
+    const merged = [...activeNote.tags];
+    for (const tag of pendingTagSuggestions) {
+      if (!merged.includes(tag)) merged.push(tag);
+    }
+    updateNote(activeNote.id, { tags: merged });
+    setPendingTagSuggestions([]);
+  };
+
+  const handleDismissTagSuggestions = () => {
+    setTagSuggestResult(null);
+    setPendingTagSuggestions([]);
   };
 
   const handleSaveSource = () => {
@@ -680,6 +859,49 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
             const iconSize = isMobileBar ? 16 : 14;
             return (
               <>
+                {/* Undo & Redo at leftmost corner */}
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().undo().run()}
+                  disabled={!editor.can().undo()}
+                  aria-label="Undo"
+                  title="Undo"
+                  className={`${pad} rounded text-xs transition-colors text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C] disabled:opacity-35 disabled:pointer-events-none`}
+                >
+                  <Undo2 size={iconSize} />
+                </button>
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => editor.chain().focus().redo().run()}
+                  disabled={!editor.can().redo()}
+                  aria-label="Redo"
+                  title="Redo"
+                  className={`${pad} rounded text-xs transition-colors text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C] disabled:opacity-35 disabled:pointer-events-none`}
+                >
+                  <Redo2 size={iconSize} />
+                </button>
+
+                <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
+
+                {/* Inline AI Writing Companion */}
+                <button
+                  type="button"
+                  onMouseDown={keepFocus}
+                  onClick={() => openAiAssistant()}
+                  aria-label="AI Pendamping Menulis"
+                  title="AI Pendamping Menulis (atau ketik / di baris baru)"
+                  className={`${
+                    isMobileBar ? 'px-2.5 py-1.5 shrink-0' : 'px-2 py-1'
+                  } rounded text-xs font-medium transition-colors inline-flex items-center gap-1 text-[#9A3412] dark:text-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 hover:bg-[#9A3412]/15 dark:hover:bg-[#EA580C]/25 cursor-pointer`}
+                >
+                  <Sparkles size={isMobileBar ? 14 : 13} />
+                  <span className="text-[11px] leading-none">AI</span>
+                </button>
+
+                <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
+
                 <button
                   type="button"
                   onMouseDown={keepFocus}
@@ -837,7 +1059,8 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
             isEditorFocused &&
             !showMobileInspector &&
             !showLinkDialog &&
-            !showImageDialog;
+            !showImageDialog &&
+            !showAiSheet;
 
           return (
             <>
@@ -1083,15 +1306,43 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                       value={newTagInput}
                       onChange={(e) => setNewTagInput(e.target.value)}
                       placeholder="Add new tag..."
-                      className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
+                      className="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
                     />
                     <button
                       type="submit"
-                      className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs hover:bg-[#78280E]"
+                      title="Tambah tag"
+                      aria-label="Tambah tag"
+                      className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs hover:bg-[#78280E] transition-colors shrink-0 flex items-center justify-center"
                     >
                       <Plus size={13} />
                     </button>
+                    <button
+                      type="button"
+                      onClick={handleSuggestTags}
+                      disabled={isSuggestingTags}
+                      title="Saran tag dengan AI"
+                      aria-label="Saran tag dengan AI"
+                      className="px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#9A3412] dark:text-[#EA580C] hover:border-[#9A3412] dark:hover:border-[#EA580C] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors shrink-0 flex items-center justify-center cursor-pointer"
+                    >
+                      {isSuggestingTags ? (
+                        <Loader2 size={13} className="animate-spin" />
+                      ) : (
+                        <Sparkles size={13} />
+                      )}
+                    </button>
                   </form>
+
+                  <TagSuggestionsPanel
+                    error={tagSuggestError}
+                    result={tagSuggestResult}
+                    pendingTags={pendingTagSuggestions}
+                    existingWorkspaceTags={workspaceTagSet}
+                    onApplyTag={handleApplySuggestedTag}
+                    onApplyAll={handleApplyAllSuggestedTags}
+                    onDismiss={handleDismissTagSuggestions}
+                    onDismissError={() => setTagSuggestError(null)}
+                    overlayKey={`note-tags-ai-desktop-${activeNote.id}`}
+                  />
                 </div>
 
                 {/* 4. Semantic Embedding (bge-m3) */}
@@ -1521,15 +1772,43 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                         value={newTagInput}
                         onChange={(e) => setNewTagInput(e.target.value)}
                         placeholder="New tag..."
-                        className="flex-1 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E]"
+                        className="flex-1 min-w-0 text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1]"
                       />
                       <button
                         type="submit"
-                        className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs"
+                        title="Tambah tag"
+                        aria-label="Tambah tag"
+                        className="px-2.5 py-1.5 bg-[#9A3412] text-white rounded-lg text-xs shrink-0 flex items-center justify-center"
                       >
                         <Plus size={13} />
                       </button>
+                      <button
+                        type="button"
+                        onClick={handleSuggestTags}
+                        disabled={isSuggestingTags}
+                        title="Saran tag dengan AI"
+                        aria-label="Saran tag dengan AI"
+                        className="px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#9A3412] dark:text-[#EA580C] hover:border-[#9A3412] dark:hover:border-[#EA580C] disabled:opacity-50 transition-colors shrink-0 flex items-center justify-center cursor-pointer"
+                      >
+                        {isSuggestingTags ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <Sparkles size={13} />
+                        )}
+                      </button>
                     </form>
+
+                    <TagSuggestionsPanel
+                      error={tagSuggestError}
+                      result={tagSuggestResult}
+                      pendingTags={pendingTagSuggestions}
+                      existingWorkspaceTags={workspaceTagSet}
+                      onApplyTag={handleApplySuggestedTag}
+                      onApplyAll={handleApplyAllSuggestedTags}
+                      onDismiss={handleDismissTagSuggestions}
+                      onDismissError={() => setTagSuggestError(null)}
+                      overlayKey={`note-tags-ai-mobile-${activeNote.id}`}
+                    />
                   </div>
 
                   {/* 4. Semantic Embedding (bge-m3) */}
@@ -1829,6 +2108,57 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           }
         }}
         itemType="note"
+      />
+
+      {/* Desktop-only Floating AI Selection Pill (hidden on mobile to avoid native copy-paste collision) */}
+      {desktopSelectionCoords && !showAiSheet && isEditorFocused && (
+        <div
+          style={{
+            left:
+              typeof window !== 'undefined'
+                ? Math.max(12, Math.min(desktopSelectionCoords.left, window.innerWidth - 160))
+                : desktopSelectionCoords.left,
+            top: Math.max(58, desktopSelectionCoords.top - 42),
+          }}
+          className="hidden md:flex fixed z-30 animate-in fade-in duration-100"
+        >
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => openAiAssistant()}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-lg text-xs font-medium text-[#9A3412] dark:text-[#EA580C] hover:border-[#9A3412] dark:hover:border-[#EA580C] transition-colors cursor-pointer"
+          >
+            <Sparkles size={13} />
+            <span>AI Pendamping</span>
+          </button>
+        </div>
+      )}
+
+      {/* Slash Command Menu (/...) */}
+      {!showAiSheet && (
+        <SlashCommandMenu
+          trigger={slashTrigger}
+          onSelect={handleSlashSelect}
+          onClose={() => setSlashTrigger(null)}
+        />
+      )}
+
+      {/* AI Inline Writing Companion Sheet */}
+      <EditorAiSheet
+        isOpen={showAiSheet}
+        onClose={() => setShowAiSheet(false)}
+        contextKind="note"
+        snapshot={aiSnapshot}
+        title={title}
+        noteType={activeNote.type}
+        autoRunAction={aiAutoRunAction}
+        onConsumeAutoRun={() => setAiAutoRunAction(null)}
+        onApply={(html, applyMode) => {
+          if (editor && aiSnapshot) {
+            applyAiHtmlToEditor(editor, aiSnapshot, html, applyMode);
+          }
+        }}
+        overlayKey={`note-ai-sheet-${activeNote.id}`}
       />
     </div>
   );

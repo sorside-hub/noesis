@@ -192,3 +192,38 @@ export interface DiscoverConnectionRecord {
   analysis?: ConnectionAnalysis;
   updatedAt: string;
 }
+
+export interface TagSuggestionResult {
+  suggestedTags: string[];
+  reasoning?: string;
+  sampled?: boolean;
+  contentLength?: number;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
+}
+
+export type WritingAssistMode = 'selection' | 'cursor';
+
+export type WritingAssistAction =
+  | 'polish'
+  | 'shorten'
+  | 'expand'
+  | 'bullets'
+  | 'critique'
+  | 'continue'
+  | 'ideas'
+  | 'summarize'
+  | 'custom';
+
+export interface WritingAssistResult {
+  resultHtml: string;
+  plainText: string;
+  summaryNote?: string;
+  isAdvisoryOnly?: boolean;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
+}
+
+

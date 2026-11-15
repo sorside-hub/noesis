@@ -8,6 +8,10 @@ import {
   ConnectionCandidate,
   TopicClusterCandidate,
   TopicClusterSummary,
+  TagSuggestionResult,
+  WritingAssistMode,
+  WritingAssistAction,
+  WritingAssistResult,
 } from '../types';
 import { cleanTextForEmbedding } from './cloudflareEmbedding';
 import { VectorMapResult } from './supabase';
@@ -645,3 +649,101 @@ export const requestSummarizeCluster = async (
     aiTrace: json.aiTrace,
   };
 };
+
+export const MAX_AI_TAGS_PER_ITEM = 5;
+
+export const collectWorkspaceTags = (
+  notes: Note[],
+  fragments: Fragment[],
+  limit = 100
+): string[] => {
+  const counts = new Map<string, number>();
+
+  const addTag = (raw: string) => {
+    const clean = String(raw || '')
+      .trim()
+      .toLowerCase()
+      .replace(/^#+/, '');
+    if (!clean) return;
+    counts.set(clean, (counts.get(clean) || 0) + 1);
+  };
+
+  for (const n of notes) {
+    if (n.archived) continue;
+    for (const tag of n.tags || []) addTag(tag);
+  }
+  for (const f of fragments) {
+    for (const tag of f.tags || []) addTag(tag);
+  }
+
+  return Array.from(counts.entries())
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
+    .slice(0, limit)
+    .map(([tag]) => tag);
+};
+
+export const requestSuggestTags = async (payload: {
+  kind: 'note' | 'fragment';
+  title: string;
+  content: string;
+  source?: string;
+  itemType?: string;
+  currentTags: string[];
+  existingTags: string[];
+  maxSuggestions?: number;
+  maxTotalTags?: number;
+}): Promise<TagSuggestionResult> => {
+  const res = await fetch('/api/ai/suggest-tags', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new Error(json.error || 'Gagal membuat saran tag AI.');
+  }
+
+  return {
+    ...json.result,
+    modelUsed: json.modelUsed,
+    fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
+  };
+};
+
+export const requestWritingAssist = async (payload: {
+  contextKind: 'note' | 'project';
+  mode: WritingAssistMode;
+  action: WritingAssistAction;
+  customPrompt?: string;
+  selectedText?: string;
+  title?: string;
+  surroundingBefore?: string;
+  surroundingAfter?: string;
+  documentExcerpt?: string;
+  projectTitle?: string;
+  sectionTitle?: string;
+  previousSectionSnippet?: string;
+  noteType?: string;
+}): Promise<WritingAssistResult> => {
+  const res = await fetch('/api/ai/writing-assist', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new Error(json.error || 'Gagal memproses pendamping AI.');
+  }
+
+  return {
+    ...json.result,
+    modelUsed: json.modelUsed,
+    fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
+  };
+};
+
+

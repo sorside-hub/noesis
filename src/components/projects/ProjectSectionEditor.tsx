@@ -4,7 +4,7 @@ import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
 import Link from '@tiptap/extension-link';
 import Underline from '@tiptap/extension-underline';
-import { ProjectSection } from '../../types';
+import { ProjectSection, WritingAssistAction } from '../../types';
 import { useVirtualKeyboardOpen } from '../../hooks/useVirtualKeyboardOpen';
 import { useBackOverlay } from '../../hooks/useBackOverlay';
 import { useScrollRestoration } from '../../hooks/useScrollRestoration';
@@ -27,7 +27,20 @@ import {
   ArrowLeft,
   Check,
   FileText,
+  Undo2,
+  Redo2,
+  Sparkles,
 } from 'lucide-react';
+import {
+  EditorAiSheet,
+  SlashCommandMenu,
+  SlashCommandItem,
+  SlashTriggerMatch,
+  EditorAiSnapshot,
+  captureEditorAiSnapshot,
+  applyAiHtmlToEditor,
+  detectSlashCommandTrigger,
+} from '../EditorAiAssistant';
 
 interface ProjectSectionEditorProps {
   projectId: string;
@@ -45,6 +58,8 @@ interface ProjectSectionEditorProps {
   onOpenQuickReference?: () => void;
   linkedReferencesCount?: number;
   insertRequest?: { nonce: number; html: string } | null;
+  projectTitle?: string;
+  previousSectionSnippet?: string;
 }
 
 export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
@@ -59,6 +74,8 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
   onOpenQuickReference,
   linkedReferencesCount = 0,
   insertRequest = null,
+  projectTitle,
+  previousSectionSnippet,
 }) => {
   const proseScrollRef = useScrollRestoration<HTMLDivElement>(
     !inlineMaster ? `project-sec:${projectId}:${section.id}` : null
@@ -68,6 +85,14 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
   const [isEditorFocused, setIsEditorFocused] = useState(false);
   const [showLinkDialog, setShowLinkDialog] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
+  const [showAiSheet, setShowAiSheet] = useState(false);
+  const [aiSnapshot, setAiSnapshot] = useState<EditorAiSnapshot | null>(null);
+  const [aiAutoRunAction, setAiAutoRunAction] = useState<WritingAssistAction | null>(null);
+  const [slashTrigger, setSlashTrigger] = useState<SlashTriggerMatch | null>(null);
+  const [desktopSelectionCoords, setDesktopSelectionCoords] = useState<{
+    left: number;
+    top: number;
+  } | null>(null);
   const isKeyboardOpen = useVirtualKeyboardOpen();
 
   // Anti-race refs matching TiptapEditor pattern
@@ -140,10 +165,28 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
       blurTimeoutRef.current = setTimeout(() => {
         if (!ed.isDestroyed && !ed.isFocused) {
           setIsEditorFocused(false);
+          setDesktopSelectionCoords(null);
         }
       }, 120);
     },
+    onSelectionUpdate: ({ editor: ed }) => {
+      setSlashTrigger(detectSlashCommandTrigger(ed));
+      if (!ed.state.selection.empty) {
+        try {
+          const coords = ed.view.coordsAtPos(ed.state.selection.from);
+          setDesktopSelectionCoords({ left: coords.left, top: coords.top });
+        } catch {
+          setDesktopSelectionCoords(null);
+        }
+      } else {
+        setDesktopSelectionCoords(null);
+      }
+    },
     onUpdate: ({ editor: ed }) => {
+      setSlashTrigger(detectSlashCommandTrigger(ed));
+      if (ed.state.selection.empty) {
+        setDesktopSelectionCoords(null);
+      }
       if (isSyncingFromPropRef.current) return;
       const html = ed.getHTML();
       onUpdateRef.current(projectIdRef.current, sectionIdRef.current, { content: html });
@@ -159,6 +202,11 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
       projectIdRef.current = projectId;
       sectionIdRef.current = section.id;
       setTitle(section.title || '');
+      setShowAiSheet(false);
+      setAiSnapshot(null);
+      setAiAutoRunAction(null);
+      setSlashTrigger(null);
+      setDesktopSelectionCoords(null);
       if (editor && !editor.isDestroyed) {
         isSyncingFromPropRef.current = true;
         editor.commands.setContent(section.content || '<p></p>');
@@ -223,6 +271,56 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
     setShowLinkDialog(false);
   }, [editor, linkUrl]);
 
+  useEffect(() => {
+    if (!slashTrigger) return;
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSlashTrigger(null);
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [slashTrigger]);
+
+  const openAiAssistant = useCallback(
+    (autoAction?: WritingAssistAction | null) => {
+      if (!editor || editor.isDestroyed) return;
+      const snapshot = captureEditorAiSnapshot(editor);
+      setSlashTrigger(null);
+      setDesktopSelectionCoords(null);
+      setAiSnapshot(snapshot);
+      setAiAutoRunAction(autoAction ?? null);
+      setShowAiSheet(true);
+      editor.commands.blur();
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    },
+    [editor]
+  );
+
+  const handleSlashSelect = useCallback(
+    (item: SlashCommandItem) => {
+      if (!editor || editor.isDestroyed || !slashTrigger) return;
+      editor
+        .chain()
+        .focus()
+        .deleteRange({ from: slashTrigger.from, to: slashTrigger.to })
+        .run();
+      const snapshot = captureEditorAiSnapshot(editor);
+      setSlashTrigger(null);
+      setDesktopSelectionCoords(null);
+      setAiSnapshot(snapshot);
+      setAiAutoRunAction(item.action === 'open_prompt' ? null : item.action);
+      setShowAiSheet(true);
+      editor.commands.blur();
+      if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
+    },
+    [editor, slashTrigger]
+  );
+
   const wordCount = useMemo(() => countWordsFromContent(section.content || ''), [section.content]);
   const isDone = section.status === 'done';
 
@@ -237,6 +335,49 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
     const iconSize = isMobileBar ? 16 : 14;
     return (
       <>
+        {/* Undo & Redo at leftmost corner */}
+        <button
+          type="button"
+          onMouseDown={keepFocus}
+          onClick={() => editor.chain().focus().undo().run()}
+          disabled={!editor.can().undo()}
+          aria-label="Undo"
+          title="Undo"
+          className={`${pad} rounded text-xs transition-colors text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C] disabled:opacity-35 disabled:pointer-events-none`}
+        >
+          <Undo2 size={iconSize} />
+        </button>
+        <button
+          type="button"
+          onMouseDown={keepFocus}
+          onClick={() => editor.chain().focus().redo().run()}
+          disabled={!editor.can().redo()}
+          aria-label="Redo"
+          title="Redo"
+          className={`${pad} rounded text-xs transition-colors text-[#6B635B] dark:text-[#A8A196] hover:bg-[#ECE4DC] dark:hover:bg-[#332F2C] disabled:opacity-35 disabled:pointer-events-none`}
+        >
+          <Redo2 size={iconSize} />
+        </button>
+
+        <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
+
+        {/* Inline AI Writing Companion */}
+        <button
+          type="button"
+          onMouseDown={keepFocus}
+          onClick={() => openAiAssistant()}
+          aria-label="AI Pendamping Menulis"
+          title="AI Pendamping Menulis (atau ketik / di baris baru)"
+          className={`${
+            isMobileBar ? 'px-2.5 py-1.5 shrink-0' : 'px-2 py-1'
+          } rounded text-xs font-medium transition-colors inline-flex items-center gap-1 text-[#9A3412] dark:text-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 hover:bg-[#9A3412]/15 dark:hover:bg-[#EA580C]/25 cursor-pointer`}
+        >
+          <Sparkles size={isMobileBar ? 14 : 13} />
+          <span className="text-[11px] leading-none">AI</span>
+        </button>
+
+        <span className="w-px h-4 bg-[#E8E2D8] dark:bg-[#332F2C] mx-1 shrink-0" />
+
         <button
           type="button"
           onMouseDown={keepFocus}
@@ -380,7 +521,7 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
     );
   };
 
-  const showMobileToolbar = isKeyboardOpen && isEditorFocused && !showLinkDialog;
+  const showMobileToolbar = isKeyboardOpen && isEditorFocused && !showLinkDialog && !showAiSheet;
 
   return (
     <div
@@ -547,6 +688,59 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
           className={`cursor-text ${inlineMaster ? 'pb-4' : 'pb-20'}`}
         />
       </div>
+
+      {/* Desktop-only Floating AI Selection Pill */}
+      {desktopSelectionCoords && !showAiSheet && isEditorFocused && (
+        <div
+          style={{
+            left:
+              typeof window !== 'undefined'
+                ? Math.max(12, Math.min(desktopSelectionCoords.left, window.innerWidth - 160))
+                : desktopSelectionCoords.left,
+            top: Math.max(58, desktopSelectionCoords.top - 42),
+          }}
+          className="hidden md:flex fixed z-30 animate-in fade-in duration-100"
+        >
+          <button
+            type="button"
+            onMouseDown={(e) => e.preventDefault()}
+            onClick={() => openAiAssistant()}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-lg text-xs font-medium text-[#9A3412] dark:text-[#EA580C] hover:border-[#9A3412] dark:hover:border-[#EA580C] transition-colors cursor-pointer"
+          >
+            <Sparkles size={13} />
+            <span>AI Pendamping</span>
+          </button>
+        </div>
+      )}
+
+      {/* Slash Command Menu (/...) */}
+      {!showAiSheet && (
+        <SlashCommandMenu
+          trigger={slashTrigger}
+          onSelect={handleSlashSelect}
+          onClose={() => setSlashTrigger(null)}
+        />
+      )}
+
+      {/* AI Inline Writing Companion Sheet */}
+      <EditorAiSheet
+        isOpen={showAiSheet}
+        onClose={() => setShowAiSheet(false)}
+        contextKind="project"
+        snapshot={aiSnapshot}
+        title={title}
+        projectTitle={projectTitle}
+        sectionTitle={title || section.title}
+        previousSectionSnippet={previousSectionSnippet}
+        autoRunAction={aiAutoRunAction}
+        onConsumeAutoRun={() => setAiAutoRunAction(null)}
+        onApply={(html, applyMode) => {
+          if (editor && aiSnapshot) {
+            applyAiHtmlToEditor(editor, aiSnapshot, html, applyMode);
+          }
+        }}
+        overlayKey={`project-ai-sheet-${projectId}-${section.id}`}
+      />
     </div>
   );
 };

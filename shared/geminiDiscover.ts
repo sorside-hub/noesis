@@ -566,3 +566,424 @@ Tugas & Aturan Kejujuran:
 
   return { success: true, modelUsed, fallbackUsed, aiTrace, result };
 }
+
+const normalizeTagSlug = (raw: string): string => {
+  return raw
+    .trim()
+    .toLowerCase()
+    .replace(/^#+/, '')
+    .replace(/\s+/g, '-')
+    .replace(/[^\p{L}\p{N}_-]/gu, '')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '')
+    .slice(0, 32);
+};
+
+const extractHeadingsFromHtml = (rawHtml: string): string[] => {
+  if (!rawHtml) return [];
+  const headings: string[] = [];
+  const seen = new Set<string>();
+  const regex = /<h[1-4][^>]*>([\s\S]*?)<\/h[1-4]>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = regex.exec(rawHtml)) !== null) {
+    const clean = stripHtml(match[1]).slice(0, 90);
+    const key = clean.toLowerCase();
+    if (clean && !seen.has(key)) {
+      seen.add(key);
+      headings.push(clean);
+      if (headings.length >= 12) break;
+    }
+  }
+  return headings;
+};
+
+const buildSmartTaggingExcerpt = (
+  rawContent: string
+): { text: string; sampled: boolean; contentLength: number } => {
+  const cleanText = stripHtml(rawContent || '');
+  const contentLength = cleanText.length;
+
+  if (contentLength <= 6000) {
+    return { text: cleanText, sampled: false, contentLength };
+  }
+
+  const head = cleanText.slice(0, 3500).trim();
+  const tail = cleanText.slice(-1500).trim();
+  const headings = extractHeadingsFromHtml(rawContent);
+
+  const parts: string[] = [`[Bagian Pembuka]\n${head}`];
+  if (headings.length > 0) {
+    parts.push(`[Subjudul di Tengah Tulisan]\n- ${headings.join('\n- ')}`);
+  }
+  parts.push(`[Bagian Penutup]\n${tail}`);
+
+  return {
+    text: parts.join('\n\n'),
+    sampled: true,
+    contentLength,
+  };
+};
+
+export async function suggestTagsWithGemini(
+  apiKey: string | undefined,
+  body: {
+    kind?: 'note' | 'fragment';
+    title?: string;
+    content?: string;
+    source?: string;
+    itemType?: string;
+    currentTags?: string[];
+    existingTags?: string[];
+    maxSuggestions?: number;
+    maxTotalTags?: number;
+  }
+) {
+  const {
+    kind = 'note',
+    title = '',
+    content = '',
+    source = '',
+    itemType = 'thought',
+    currentTags = [],
+    existingTags = [],
+    maxSuggestions = 3,
+    maxTotalTags = 5,
+  } = body || {};
+
+  const cleanTitle = String(title || '').trim();
+  const cleanSource = String(source || '').trim();
+  const { text: excerptedContent, sampled, contentLength } = buildSmartTaggingExcerpt(
+    String(content || '')
+  );
+
+  if (cleanTitle.length + excerptedContent.length < 8) {
+    throw new DiscoverApiError(
+      'Tulis judul atau isi terlebih dahulu agar AI bisa menyarankan tag yang relevan.',
+      400
+    );
+  }
+
+  const normalizedCurrent = Array.from(
+    new Set(
+      (Array.isArray(currentTags) ? currentTags : [])
+        .map((t) => normalizeTagSlug(String(t)))
+        .filter(Boolean)
+    )
+  );
+
+  const remainingSlots = Math.max(0, maxTotalTags - normalizedCurrent.length);
+  if (remainingSlots === 0) {
+    throw new DiscoverApiError(
+      `Tag sudah mencapai batas ideal (${maxTotalTags} tag). Hapus salah satu tag jika ingin saran baru.`,
+      400
+    );
+  }
+
+  const targetCount = Math.min(3, Math.max(1, Number(maxSuggestions) || 3), remainingSlots);
+
+  const currentTagSet = new Set(normalizedCurrent);
+  const normalizedExisting = Array.from(
+    new Set(
+      (Array.isArray(existingTags) ? existingTags : [])
+        .map((t) => normalizeTagSlug(String(t)))
+        .filter((t) => Boolean(t) && !currentTagSet.has(t))
+    )
+  ).slice(0, 100);
+
+  const existingTagsBlock =
+    normalizedExisting.length > 0
+      ? normalizedExisting.join(', ')
+      : '(Belum ada daftar tag lain di Library)';
+
+  const currentTagsBlock =
+    normalizedCurrent.length > 0 ? normalizedCurrent.join(', ') : '(Belum ada tag terpasang)';
+
+  const prompt = `Analisis ${kind === 'fragment' ? 'Fragment' : 'Catatan'} berikut dan sarankan hingga ${targetCount} tag yang paling akurat, ringkas, dan berguna untuk pengarsipan di Noesis.
+
+METADATA ITEM:
+- Jenis: ${kind === 'fragment' ? 'Fragment' : 'Catatan'} (${itemType})
+- Judul: ${cleanTitle || 'Tanpa Judul'}
+${cleanSource ? `- Sumber: ${cleanSource}\n` : ''}- Tag yang SUDAH terpasang (DILARANG mengulang): ${currentTagsBlock}
+
+DAFTAR TAG YANG SUDAH ADA DI WORKSPACE (urut frekuensi pemakaian):
+${existingTagsBlock}
+
+ISI ${sampled ? '(Ringkasan Pintar: Pembuka, Subjudul, & Penutup karena tulisan panjang)' : '(Lengkap)'}:
+${excerptedContent || '(Hanya judul)'}
+
+ATURAN KETAT PEMILIHAN TAG:
+1. Berikan TEPAT 1 sampai ${targetCount} tag (jangan lebih dari ${targetCount}).
+2. PRIORITAS UTAMA: Gunakan tag dari "DAFTAR TAG YANG SUDAH ADA DI WORKSPACE" jika maknanya sesuai, agar kosakata tag pengguna tetap konsisten dan tidak terpecah menjadi sinonim kembar.
+3. Hanya buat tag baru jika memang ada konsep/tema penting yang belum terwakili di daftar tag yang sudah ada.
+4. Format setiap tag: huruf kecil semua, tanpa simbol #, singkat (1-2 kata; gabung dengan tanda hubung '-' jika 2 kata, misal: 'deep-work', 'psikologi', 'stoikisme').
+5. DILARANG mengulang tag yang ada di "Tag yang SUDAH terpasang".
+6. Hindari tag yang terlalu umum/hampa seperti 'catatan', 'note', 'tulisan', 'umum', atau 'refleksi-diri' kecuali memang spesifik relevan dengan gaya arsip pengguna.`;
+
+  const { data: result, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
+    apiKey,
+    async (ai, model, isFallback) => {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction:
+            'Kamu adalah pustakawan pengetahuan di Noesis yang teliti membuat taksonomi tag yang rapi, konsisten, dan tidak berlebihan.',
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel: isFallback ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
+          },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              suggestedTags: {
+                type: Type.ARRAY,
+                items: { type: Type.STRING },
+                description: `Daftar 1 sampai ${targetCount} tag singkat huruf kecil tanpa tanda pagar #.`,
+              },
+              reasoning: {
+                type: Type.STRING,
+                description:
+                  'Penjelasan sangat singkat 1 kalimat kenapa tag tersebut dipilih (sebutkan jika mengambil tag yang sudah ada di workspace).',
+              },
+            },
+            required: ['suggestedTags', 'reasoning'],
+          },
+        },
+      });
+
+      const text = response.text?.trim();
+      if (!text) {
+        throw new Error('Model mengembalikan respons kosong.');
+      }
+      return JSON.parse(text);
+    }
+  );
+
+  const cleanedSuggestions: string[] = [];
+  const seen = new Set<string>(normalizedCurrent);
+
+  if (Array.isArray(result?.suggestedTags)) {
+    for (const rawTag of result.suggestedTags) {
+      const normalized = normalizeTagSlug(String(rawTag || ''));
+      if (normalized && !seen.has(normalized)) {
+        seen.add(normalized);
+        cleanedSuggestions.push(normalized);
+        if (cleanedSuggestions.length >= targetCount) break;
+      }
+    }
+  }
+
+  return {
+    success: true,
+    modelUsed,
+    fallbackUsed,
+    aiTrace,
+    result: {
+      suggestedTags: cleanedSuggestions,
+      reasoning: typeof result?.reasoning === 'string' ? result.reasoning.trim() : '',
+      sampled,
+      contentLength,
+    },
+  };
+}
+
+export type WritingAssistActionType =
+  | 'polish'
+  | 'shorten'
+  | 'expand'
+  | 'bullets'
+  | 'critique'
+  | 'continue'
+  | 'ideas'
+  | 'summarize'
+  | 'custom';
+
+export async function assistWritingWithGemini(
+  apiKey: string | undefined,
+  body: {
+    contextKind?: 'note' | 'project';
+    mode?: 'selection' | 'cursor';
+    action?: WritingAssistActionType;
+    customPrompt?: string;
+    selectedText?: string;
+    title?: string;
+    surroundingBefore?: string;
+    surroundingAfter?: string;
+    documentExcerpt?: string;
+    projectTitle?: string;
+    sectionTitle?: string;
+    previousSectionSnippet?: string;
+    noteType?: string;
+  }
+) {
+  const {
+    contextKind = 'note',
+    mode = 'cursor',
+    action = 'continue',
+    customPrompt = '',
+    selectedText = '',
+    title = '',
+    surroundingBefore = '',
+    surroundingAfter = '',
+    documentExcerpt = '',
+    projectTitle = '',
+    sectionTitle = '',
+    previousSectionSnippet = '',
+    noteType = 'thought',
+  } = body || {};
+
+  const cleanSelected = String(selectedText || '').trim();
+  const cleanTitle = String(title || '').trim();
+  const cleanCustom = String(customPrompt || '').trim();
+  const cleanBefore = stripHtml(String(surroundingBefore || '')).slice(-2800).trim();
+  const cleanAfter = stripHtml(String(surroundingAfter || '')).slice(0, 1200).trim();
+  const cleanDoc = stripHtml(String(documentExcerpt || '')).slice(0, 6000).trim();
+
+  if (mode === 'selection' && !cleanSelected) {
+    throw new DiscoverApiError('Pilih atau blok teks terlebih dahulu untuk diolah AI.', 400);
+  }
+
+  if (
+    mode === 'cursor' &&
+    cleanTitle.length + cleanBefore.length + cleanDoc.length < 6 &&
+    !cleanCustom
+  ) {
+    throw new DiscoverApiError(
+      'Tulis sedikit judul, kalimat awal, atau masukkan instruksi khusus terlebih dahulu.',
+      400
+    );
+  }
+
+  if (action === 'custom' && !cleanCustom) {
+    throw new DiscoverApiError('Tuliskan instruksi khusus untuk AI terlebih dahulu.', 400);
+  }
+
+  const actionInstructionMap: Record<WritingAssistActionType, string> = {
+    polish:
+      'Rapikan dan jernihkan teks terpilih: perbaiki ejaan, tanda baca, dan kelancaran alur kalimat. PERTAHANKAN suara, gaya bahasa, dan makna asli penulis (jangan mengubahnya menjadi bahasa kaku atau klise).',
+    shorten:
+      'Persingkat dan padatkan teks terpilih agar lebih tajam dan langsung ke inti, tanpa membuang gagasan utamanya.',
+    expand:
+      'Perluas dan elaborasi teks terpilih menjadi 1-2 paragraf yang lebih utuh, jelas, dan mengalir, selaras dengan konteks tulisan di sekitarnya.',
+    bullets:
+      'Ubah teks terpilih menjadi daftar poin (<ul><li>...</li></ul>) yang terstruktur rapi, mudah dipindai, dan jelas.',
+    critique:
+      'Tinjau secara kritis dan jujur teks terpilih: tunjukkan celah logika, asumsi yang belum diuji, atau ajukan 2-3 pertanyaan tajam untuk memperkuat argumen penulis. JANGAN menulis ulang teksnya—berikan masukan/ulasan saja.',
+    continue:
+      'Lanjutkan tulisan secara alami tepat dari kalimat terakhir sebelum kursor (tulis 1-2 paragraf lanjutan yang menyambung mulus dengan alur, bahasa, dan nada tulisan penulis). Jangan mengulang kalimat terakhir.',
+    ideas:
+      'Berikan 2-3 opsi sudut pandang lanjutan, contoh konkret, atau arah pengembangan argumen yang relevan untuk melanjutkan bagian ini dalam format daftar poin ringkas.',
+    summarize:
+      'Buat ringkasan jernih dan padat (1 paragraf pendek atau beberapa poin inti) yang menangkap gagasan utama tulisan ini tanpa melebih-lebihkan klaim.',
+    custom: `Ikuti instruksi khusus pengguna secara tepat: "${cleanCustom}"`,
+  };
+
+  const contextHeader =
+    contextKind === 'project'
+      ? `KONTEKS PROYEK PENULISAN:
+- Judul Proyek: ${projectTitle || 'Tanpa Judul'}
+- Bagian / Bab Aktif: ${sectionTitle || cleanTitle || 'Tanpa Judul'}
+${previousSectionSnippet ? `- Cuplikan Bagian Sebelumnya: ${stripHtml(previousSectionSnippet).slice(-800)}\n` : ''}`
+      : `KONTEKS CATATAN:
+- Tipe Catatan: ${noteType}
+- Judul Catatan: ${cleanTitle || 'Tanpa Judul'}
+`;
+
+  const bodyContext =
+    mode === 'selection'
+      ? `${contextHeader}
+TEKS YANG DIBLOK / TERPILIH (FOKUS UTAMA):
+"""
+${cleanSelected.slice(0, 4500)}
+"""
+${cleanBefore ? `\nKONTEKS SEBELUMNYA (sekadar referensi nada & alur):\n${cleanBefore.slice(-1200)}` : ''}
+${cleanAfter ? `\nKONTEKS SESUDAHNYA (sekadar referensi):\n${cleanAfter.slice(0, 800)}` : ''}`
+      : `${contextHeader}
+${
+  action === 'summarize'
+    ? `ISI TULISAN:\n${cleanDoc || cleanBefore || '(Hanya judul)'}`
+    : `TEKS SEBELUM KURSOR:\n${cleanBefore || cleanDoc || '(Baru mulai di judul)'}${
+        cleanAfter ? `\n\nTEKS SETELAH KURSOR:\n${cleanAfter}` : ''
+      }`
+}`;
+
+  const taskInstruction = actionInstructionMap[action] || actionInstructionMap.custom;
+  const extraCustomNote =
+    action !== 'custom' && cleanCustom ? `\nCatatan tambahan pengguna: "${cleanCustom}"` : '';
+
+  const prompt = `${bodyContext}
+
+TUGAS UTAMA:
+${taskInstruction}${extraCustomNote}
+
+ATURAN FORMAT & GAYA WAJIB:
+1. Gunakan bahasa yang sama persis dengan tulisan pengguna (umumnya Bahasa Indonesia editorial yang jernih dan natural).
+2. DILARANG menggunakan kalimat basa-basi pembuka/penutup ala chatbot (seperti "Tentu, berikut hasilnya:", "Semoga membantu!"). Langsung berikan isinya.
+3. DILARANG memakai klise AI yang kosong ("Di era modern ini...", "Dalam dunia yang serba cepat...").
+4. Output "resultHtml" HARUS berupa HTML bersih yang siap masuk ke editor Tiptap (<p>, <ul>, <li>, <strong>, <em>, <blockquote>, <h3>) tanpa tag <html>, <body>, atau <h1>.
+5. Output "plainText" adalah versi teks biasa yang bersih dan mudah dibaca jika user menyalin ke clipboard.`;
+
+  const { data: result, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
+    apiKey,
+    async (ai, model, isFallback) => {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction:
+            'Kamu adalah editor & pendamping menulis yang cerdas, ringkas, dan setia pada suara asli penulis di aplikasi Noesis. Kamu membantu menjernihkan dan mengembangkan tulisan tanpa pernah terdengar seperti template AI.',
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel:
+              isFallback
+                ? ThinkingLevel.MINIMAL
+                : action === 'critique' || action === 'expand' || action === 'continue'
+                ? ThinkingLevel.MEDIUM
+                : ThinkingLevel.LOW,
+          },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              resultHtml: {
+                type: Type.STRING,
+                description:
+                  'Hasil tulisan/tanggapan dalam HTML bersih siap-pakai untuk Tiptap (<p>, <ul>, <li>, <strong>, <em>, <blockquote>).',
+              },
+              plainText: {
+                type: Type.STRING,
+                description: 'Versi teks polos yang rapi dari hasil tersebut untuk kebutuhan salin.',
+              },
+              summaryNote: {
+                type: Type.STRING,
+                description:
+                  'Keterangan sangat singkat (maks 1 kalimat) tentang apa yang dilakukan pada teks.',
+              },
+            },
+            required: ['resultHtml', 'plainText', 'summaryNote'],
+          },
+        },
+      });
+
+      const text = response.text?.trim();
+      if (!text) {
+        throw new Error('Model mengembalikan respons kosong.');
+      }
+      return JSON.parse(text);
+    }
+  );
+
+  return {
+    success: true,
+    modelUsed,
+    fallbackUsed,
+    aiTrace,
+    result: {
+      resultHtml: String(result?.resultHtml || '').trim(),
+      plainText: String(result?.plainText || stripHtml(String(result?.resultHtml || ''))).trim(),
+      summaryNote: String(result?.summaryNote || '').trim(),
+      isAdvisoryOnly: action === 'critique' || action === 'ideas',
+    },
+  };
+}
+
+

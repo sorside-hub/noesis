@@ -210,6 +210,7 @@ export const ProjectMasterView: React.FC<ProjectMasterViewProps> = ({
                 const isDone = sec.status === 'done';
 
                 if (isEditingHere) {
+                  const prevSec = index > 0 ? sortedSections[index - 1] : undefined;
                   return (
                     <section key={sec.id} className="scroll-mt-4">
                       <ProjectSectionEditor
@@ -219,6 +220,8 @@ export const ProjectMasterView: React.FC<ProjectMasterViewProps> = ({
                         onToggleStatus={onToggleSectionStatus}
                         onFlushSave={onFlushSave}
                         inlineMaster
+                        projectTitle={project.title}
+                        previousSectionSnippet={prevSec?.content}
                         onDone={() => setEditingSectionId(null)}
                       />
                     </section>
