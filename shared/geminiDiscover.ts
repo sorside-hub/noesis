@@ -714,8 +714,8 @@ ${excerptedContent || '(Hanya judul)'}
 ATURAN KETAT PEMILIHAN TAG:
 1. Berikan TEPAT 1 sampai ${targetCount} tag (jangan lebih dari ${targetCount}).
 2. PRIORITAS UTAMA: Gunakan tag dari "DAFTAR TAG YANG SUDAH ADA DI WORKSPACE" jika maknanya sesuai, agar kosakata tag pengguna tetap konsisten dan tidak terpecah menjadi sinonim kembar.
-3. Hanya buat tag baru jika memang ada konsep/tema penting yang belum terwakili di daftar tag yang sudah ada.
-4. Format setiap tag: huruf kecil semua, tanpa simbol #, singkat (1-2 kata; gabung dengan tanda hubung '-' jika 2 kata, misal: 'deep-work', 'psikologi', 'stoikisme').
+3. BAHASA INDONESIA WAJIB UNTUK TAG BARU: Jika membuat tag baru (yang belum ada di daftar workspace), WAJIB pakai Bahasa Indonesia yang alami dan ringkas (misal: 'fokus', 'kerja-mendalam', 'psikologi', 'kebiasaan', 'filsafat', 'produktivitas'). DILARANG memakai Bahasa Inggris jika ada padanan Bahasa Indonesia yang wajar, kecuali nama tokoh, judul karya, atau istilah teknis baku yang memang tidak diterjemahkan.
+4. Format setiap tag: huruf kecil semua, tanpa simbol #, singkat (1-2 kata; gabung dengan tanda hubung '-' jika 2 kata).
 5. DILARANG mengulang tag yang ada di "Tag yang SUDAH terpasang".
 6. Hindari tag yang terlalu umum/hampa seperti 'catatan', 'note', 'tulisan', 'umum', atau 'refleksi-diri' kecuali memang spesifik relevan dengan gaya arsip pengguna.`;
 
@@ -727,7 +727,7 @@ ATURAN KETAT PEMILIHAN TAG:
         contents: prompt,
         config: {
           systemInstruction:
-            'Kamu adalah pustakawan pengetahuan di Noesis yang teliti membuat taksonomi tag yang rapi, konsisten, dan tidak berlebihan.',
+            'Kamu adalah pustakawan pengetahuan berbahasa Indonesia di Noesis yang teliti membuat taksonomi tag Bahasa Indonesia yang rapi, konsisten, dan tidak berlebihan.',
           responseMimeType: 'application/json',
           thinkingConfig: {
             thinkingLevel: isFallback ? ThinkingLevel.MINIMAL : ThinkingLevel.LOW,
@@ -738,7 +738,7 @@ ATURAN KETAT PEMILIHAN TAG:
               suggestedTags: {
                 type: Type.ARRAY,
                 items: { type: Type.STRING },
-                description: `Daftar 1 sampai ${targetCount} tag singkat huruf kecil tanpa tanda pagar #.`,
+                description: `Daftar 1 sampai ${targetCount} tag singkat berbahasa Indonesia dalam huruf kecil tanpa tanda pagar # (kecuali tag existing yang sudah cocok).`,
               },
               reasoning: {
                 type: Type.STRING,
