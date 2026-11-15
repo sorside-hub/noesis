@@ -27,6 +27,7 @@ export const SettingsPage: React.FC = () => {
   const {
     notes,
     relics,
+    projects,
     authUser,
     exitOfflineMode,
     requestSignOut,
@@ -98,7 +99,11 @@ export const SettingsPage: React.FC = () => {
     const res = await syncAllToSupabase();
     setIsSyncingAll(false);
     if (res.success) {
-      setSyncResult(`Tersinkron ${res.notesCount} catatan & ${res.fragmentsCount} fragments ke Supabase!`);
+      setSyncResult(
+        `Tersinkron ${res.notesCount} catatan, ${res.fragmentsCount} fragments${
+          typeof res.projectsCount === 'number' ? `, & ${res.projectsCount} projects` : ''
+        } ke Supabase!`
+      );
       setTimeout(() => setSyncResult(null), 4000);
     } else {
       setSyncResult('Supabase belum terhubung. Periksa kredensial URL & Key Anda.');
@@ -112,6 +117,7 @@ export const SettingsPage: React.FC = () => {
       exportDate: new Date().toISOString(),
       notes,
       fragments: relics,
+      projects,
     };
     const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);

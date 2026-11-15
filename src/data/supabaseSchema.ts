@@ -62,6 +62,26 @@ CREATE TABLE IF NOT EXISTS public.discover_connections (
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
 );
 
+-- 3C. TABEL PROJECTS (Wadah tujuan kerja berbasis teks + sinkronisasi lintas perangkat)
+CREATE TABLE IF NOT EXISTS public.projects (
+  id TEXT PRIMARY KEY,
+  user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
+  title TEXT NOT NULL DEFAULT '',
+  description TEXT DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'review', 'completed', 'archived')),
+  progress INTEGER DEFAULT 0,
+  enable_word_goal BOOLEAN DEFAULT false,
+  target_word_count INTEGER DEFAULT 0,
+  current_word_count INTEGER DEFAULT 0,
+  deadline TEXT,
+  note_ids TEXT[] DEFAULT '{}',
+  fragment_ids TEXT[] DEFAULT '{}',
+  sections JSONB DEFAULT '[]'::jsonb,
+  milestones JSONB DEFAULT '[]'::jsonb,
+  created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
+  updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL
+);
+
 -- 4. MIGRASI KOLOM (Untuk database yang sudah pernah dibuat sebelumnya)
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedding vector(1024);
@@ -94,15 +114,21 @@ ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.fragments ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
 
 ALTER TABLE public.discover_connections ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS enable_word_goal BOOLEAN DEFAULT false;
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS fragment_ids TEXT[] DEFAULT '{}';
+ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS sections JSONB DEFAULT '[]'::jsonb;
 
 CREATE INDEX IF NOT EXISTS notes_user_id_idx ON public.notes (user_id);
 CREATE INDEX IF NOT EXISTS fragments_user_id_idx ON public.fragments (user_id);
 CREATE INDEX IF NOT EXISTS discover_connections_user_id_idx ON public.discover_connections (user_id);
+CREATE INDEX IF NOT EXISTS projects_user_id_idx ON public.projects (user_id);
 
 -- 5. AMANKAN DENGAN ROW LEVEL SECURITY (RLS) PER USER
 ALTER TABLE public.notes ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.fragments ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.discover_connections ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.projects ENABLE ROW LEVEL SECURITY;
 
 -- 6. KEBIJAKAN AKSES KETAT (Hanya user login pemilik data yang bisa baca/tulis)
 DROP POLICY IF EXISTS "Allow public access to notes" ON public.notes;
@@ -129,12 +155,20 @@ CREATE POLICY "Users can manage own discover_connections"
   USING (auth.uid() = user_id)
   WITH CHECK (auth.uid() = user_id);
 
+DROP POLICY IF EXISTS "Users can manage own projects" ON public.projects;
+CREATE POLICY "Users can manage own projects"
+  ON public.projects FOR ALL
+  TO authenticated
+  USING (auth.uid() = user_id)
+  WITH CHECK (auth.uid() = user_id);
+
 -- 7. AKTIFKAN SUPABASE REALTIME SECARA AMAN
 DO $$
 BEGIN
   ALTER TABLE public.notes REPLICA IDENTITY FULL;
   ALTER TABLE public.fragments REPLICA IDENTITY FULL;
   ALTER TABLE public.discover_connections REPLICA IDENTITY FULL;
+  ALTER TABLE public.projects REPLICA IDENTITY FULL;
 
   IF NOT EXISTS (
     SELECT 1 FROM pg_publication_tables 
@@ -155,6 +189,13 @@ BEGIN
     WHERE pubname = 'supabase_realtime' AND tablename = 'discover_connections'
   ) THEN
     ALTER PUBLICATION supabase_realtime ADD TABLE public.discover_connections;
+  END IF;
+
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_publication_tables 
+    WHERE pubname = 'supabase_realtime' AND tablename = 'projects'
+  ) THEN
+    ALTER PUBLICATION supabase_realtime ADD TABLE public.projects;
   END IF;
 END $$;
 

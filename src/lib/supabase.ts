@@ -1,5 +1,5 @@
 import { createClient, SupabaseClient, Session, User, AuthChangeEvent } from '@supabase/supabase-js';
-import { Note, Fragment, DiscoverConnectionRecord } from '../types';
+import { Note, Fragment, DiscoverConnectionRecord, Project, ProjectStatus } from '../types';
 
 export const getSupabaseUrl = (): string => {
   return (import.meta.env.VITE_SUPABASE_URL || '').trim();
@@ -710,13 +710,149 @@ export const deleteDiscoverConnectionsForItem = async (itemId: string): Promise<
 };
 
 // ============================================================================
+// PROJECTS SYNC (Supabase CRUD + Graceful Missing-Table Detection)
+// ============================================================================
+
+export const normalizeProjectStatus = (status: unknown): ProjectStatus => {
+  if (status === 'review' || status === 'completed' || status === 'archived') {
+    return status;
+  }
+  return 'active';
+};
+
+const isMissingRelationError = (error: any): boolean => {
+  if (!error) return false;
+  const code = String(error.code || '');
+  const msg = String(error.message || '');
+  return code === '42P01' || code === 'PGRST205' || /does not exist|schema cache/i.test(msg);
+};
+
+export const toDbProject = (project: Project) => ({
+  id: project.id,
+  title: project.title,
+  description: project.description || '',
+  status: normalizeProjectStatus(project.status),
+  progress: Number(project.progress) || 0,
+  enable_word_goal: Boolean(project.enableWordGoal),
+  target_word_count: Number(project.targetWordCount) || 0,
+  current_word_count: Number(project.currentWordCount) || 0,
+  deadline: project.deadline || null,
+  note_ids: project.noteIds || [],
+  fragment_ids: project.fragmentIds || [],
+  sections: Array.isArray(project.sections) ? project.sections : [],
+  milestones: Array.isArray(project.milestones) ? project.milestones : [],
+  created_at: project.createdAt || new Date().toISOString(),
+  updated_at: project.updatedAt || new Date().toISOString(),
+});
+
+export const fromDbProject = (row: any): Project => ({
+  id: row.id,
+  title: row.title || '',
+  description: row.description || '',
+  status: normalizeProjectStatus(row.status),
+  progress: Number(row.progress) || 0,
+  enableWordGoal: Boolean(row.enable_word_goal),
+  targetWordCount: Number(row.target_word_count) || 0,
+  currentWordCount: Number(row.current_word_count) || 0,
+  deadline: row.deadline || undefined,
+  noteIds: Array.isArray(row.note_ids) ? row.note_ids : [],
+  fragmentIds: Array.isArray(row.fragment_ids) ? row.fragment_ids : [],
+  sections: Array.isArray(row.sections)
+    ? row.sections.map((s: any, idx: number) => ({
+        id: String(s.id || `sec-${idx}`),
+        title: String(s.title || `Bagian ${idx + 1}`),
+        content: String(s.content || ''),
+        status: s.status === 'done' ? 'done' : 'draft',
+        order: typeof s.order === 'number' ? s.order : idx,
+        updatedAt: String(s.updatedAt || row.updated_at || new Date().toISOString()),
+      }))
+    : [],
+  milestones: Array.isArray(row.milestones) ? row.milestones : [],
+  createdAt: row.created_at || new Date().toISOString(),
+  updatedAt: row.updated_at || new Date().toISOString(),
+});
+
+export const fetchProjectsFromSupabase = async (): Promise<{
+  projects: Project[] | null;
+  tableMissing?: boolean;
+}> => {
+  const client = getSupabaseClient();
+  if (!client) return { projects: null };
+  try {
+    const { data, error } = await client
+      .from('projects')
+      .select('*')
+      .order('updated_at', { ascending: false });
+
+    if (error) {
+      if (isMissingRelationError(error)) {
+        console.warn('Supabase projects table not provisioned yet:', error.message);
+        return { projects: null, tableMissing: true };
+      }
+      console.warn('Supabase fetchProjects error:', error.message);
+      return { projects: null };
+    }
+
+    return { projects: (data || []).map(fromDbProject), tableMissing: false };
+  } catch (err) {
+    console.warn('Supabase fetchProjects network error:', err);
+    return { projects: null };
+  }
+};
+
+export const upsertProjectToSupabase = async (
+  project: Project
+): Promise<{ ok: boolean; tableMissing?: boolean }> => {
+  const client = getSupabaseClient();
+  if (!client) return { ok: false };
+  try {
+    const dbRow: Record<string, any> = toDbProject(project);
+    const userId = await resolveAuthUserId(client);
+    if (userId) dbRow.user_id = userId;
+    const { error } = await client.from('projects').upsert(dbRow, { onConflict: 'id' });
+    if (error) {
+      if (isMissingRelationError(error)) {
+        console.warn('Supabase projects table missing during upsert:', error.message);
+        return { ok: false, tableMissing: true };
+      }
+      console.warn('Supabase upsertProject error:', error.message);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.warn('Supabase upsertProject network error:', err);
+    return { ok: false };
+  }
+};
+
+export const deleteProjectFromSupabase = async (projectId: string): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client) return false;
+  try {
+    const { error } = await client.from('projects').delete().eq('id', projectId);
+    if (error) {
+      if (isMissingRelationError(error)) {
+        return false;
+      }
+      console.warn('Supabase deleteProject error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase deleteProject network error:', err);
+    return false;
+  }
+};
+
+// ============================================================================
 // REALTIME LISTENER
 // ============================================================================
 
 export const subscribeToRealtimeChanges = (
   onNotesChange: () => void,
   onFragmentsChange: () => void,
-  onDiscoverConnectionsChange?: () => void
+  onDiscoverConnectionsChange?: () => void,
+  onProjectsChange?: () => void
 ) => {
   const client = getSupabaseClient();
   if (!client) return () => {};
@@ -744,6 +880,16 @@ export const subscribeToRealtimeChanges = (
       { event: '*', schema: 'public', table: 'discover_connections' },
       () => {
         onDiscoverConnectionsChange();
+      }
+    );
+  }
+
+  if (onProjectsChange) {
+    channel.on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'projects' },
+      () => {
+        onProjectsChange();
       }
     );
   }

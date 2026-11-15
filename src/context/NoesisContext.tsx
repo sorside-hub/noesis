@@ -6,6 +6,8 @@ import {
   Relic,
   Fragment,
   Project,
+  ProjectSection,
+  ProjectStatus,
   RelicType,
   FragmentType,
   ManualNoteType,
@@ -15,6 +17,12 @@ import {
   ConnectionAnalysis,
   DiscoverConnectionRecord,
 } from '../types';
+import {
+  computeProjectProgress,
+  countProjectTotalWords,
+  compileProjectMasterHtml,
+  getSortedProjectSections,
+} from '../lib/projectMaster';
 import { INITIAL_NOTES, INITIAL_FRAGMENTS, INITIAL_RELICS, INITIAL_PROJECTS } from '../data/mockData';
 import type { User } from '@supabase/supabase-js';
 import {
@@ -31,6 +39,10 @@ import {
   fetchFragmentsFromSupabase,
   upsertFragmentToSupabase,
   deleteFragmentFromSupabase,
+  fetchProjectsFromSupabase,
+  upsertProjectToSupabase,
+  deleteProjectFromSupabase,
+  normalizeProjectStatus,
   subscribeToRealtimeChanges,
   searchNotesSemantic,
   searchFragmentsSemantic,
@@ -70,6 +82,10 @@ import {
   dequeueUpsertConnection,
   enqueueDeleteConnection,
   dequeueDeleteConnection,
+  enqueueUpsertProject,
+  dequeueUpsertProject,
+  enqueueDeleteProject,
+  dequeueDeleteProject,
 } from '../lib/offlineSyncQueue';
 import { scrollToTop } from '../hooks/useScrollRestoration';
 
@@ -98,6 +114,7 @@ interface NoesisHistoryEntry {
   idx: number;
   view: ViewMode;
   noteId: string;
+  projectId: string | null;
   fragmentDrawerOpen: boolean;
   fragmentId: string | null;
   overlayId: string | null;
@@ -181,7 +198,43 @@ interface NoesisContextType {
 
   // Projects
   projects: Project[];
+  activeProjectId: string | null;
+  setActiveProjectId: (id: string | null) => void;
+  openProject: (projectId: string) => void;
+  closeProject: () => void;
+  exitDeletedProject: (projectId: string) => void;
+  projectsTableMissing: boolean;
+  createProject: (params: {
+    title: string;
+    description?: string;
+    enableWordGoal?: boolean;
+    targetWordCount?: number;
+    deadline?: string;
+    initialSections?: string[];
+    initialMilestones?: string[];
+    noteIds?: string[];
+    fragmentIds?: string[];
+  }) => string;
+  updateProject: (id: string, updates: Partial<Project>) => void;
+  deleteProject: (id: string) => void;
+  flushProjectSave: (projectId: string) => void;
+  addProjectSection: (projectId: string, title: string, initialContent?: string) => string;
+  updateProjectSection: (
+    projectId: string,
+    sectionId: string,
+    updates: Partial<Pick<ProjectSection, 'title' | 'content' | 'status' | 'order'>>
+  ) => void;
+  deleteProjectSection: (projectId: string, sectionId: string) => void;
+  moveProjectSection: (projectId: string, sectionId: string, direction: 'up' | 'down') => void;
+  toggleProjectSectionStatus: (projectId: string, sectionId: string) => void;
+  convertMilestonesToSections: (projectId: string) => void;
+  saveProjectMasterCopyToLibrary: (projectId: string) => string | null;
   toggleProjectMilestone: (projectId: string, milestoneId: string) => void;
+  addProjectMilestone: (projectId: string, title: string) => void;
+  updateProjectMilestone: (projectId: string, milestoneId: string, title: string) => void;
+  deleteProjectMilestone: (projectId: string, milestoneId: string) => void;
+  linkItemToProject: (projectId: string, kind: 'note' | 'fragment', itemId: string) => void;
+  unlinkItemFromProject: (projectId: string, kind: 'note' | 'fragment', itemId: string) => void;
 
   // Auth & Security
   authUser: User | null;
@@ -208,7 +261,12 @@ interface NoesisContextType {
   isCloudflareConnected: boolean;
   syncStatus: 'synced' | 'syncing' | 'offline' | 'error';
   autoSyncNotice: string | null;
-  syncAllToSupabase: () => Promise<{ success: boolean; notesCount: number; fragmentsCount: number }>;
+  syncAllToSupabase: () => Promise<{
+    success: boolean;
+    notesCount: number;
+    fragmentsCount: number;
+    projectsCount?: number;
+  }>;
   manualEmbedNote: (noteId: string) => Promise<boolean>;
   manualRemoveEmbedNote: (noteId: string) => Promise<boolean>;
   manualEmbedFragment: (fragmentId: string) => Promise<boolean>;
@@ -242,6 +300,9 @@ interface NoesisContextType {
   synthesisTargetNoteId: string | null;
   startUpdateSynthesis: (noteId: string) => void;
   clearSynthesisTarget: () => void;
+  pendingSynthesisSeed: { items: DiscoverSourceItem[]; topic?: string; nonce: number } | null;
+  sendToDiscoverSynthesis: (items: DiscoverSourceItem[], topicHint?: string) => void;
+  clearPendingSynthesisSeed: () => void;
   saveSynthesizedNote: (params: {
     title: string;
     htmlContent: string;
@@ -321,6 +382,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [activeFragmentId, setActiveFragmentId] = useState<string | null>(null);
   const [isFragmentDrawerOpen, setIsFragmentDrawerOpen] = useState<boolean>(false);
   const [synthesisTargetNoteId, setSynthesisTargetNoteId] = useState<string | null>(null);
+  const [activeProjectId, setActiveProjectIdState] = useState<string | null>(null);
 
   // Persistent Tab & Filter Preferences (kept across navigation & Back)
   const [discoverTab, setDiscoverTab] = useState<DiscoverTab>('synthesis');
@@ -354,6 +416,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     idx: 0,
     view: 'home',
     noteId: '',
+    projectId: null,
     fragmentDrawerOpen: false,
     fragmentId: null,
     overlayId: null,
@@ -369,6 +432,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const activeViewRef = useRef<ViewMode>('home');
   const activeNoteIdRef = useRef<string>('');
+  const activeProjectIdRef = useRef<string | null>(null);
+  const flushProjectSaveRef = useRef<(projectId: string) => void>(() => {});
   const isFragmentDrawerOpenRef = useRef<boolean>(false);
   const activeFragmentIdRef = useRef<string | null>(null);
   const lastLibraryNoteIdRef = useRef<string | null>(null);
@@ -391,7 +456,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         case 'discover':
           return 'Discover';
         case 'projects':
-          return 'Projects';
+          return entry.projectId ? 'Project' : 'Projects';
         case 'settings':
           return 'Settings';
         case 'editor':
@@ -408,6 +473,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     setActiveViewState(entry.view);
     activeNoteIdRef.current = entry.noteId;
     setActiveNoteIdState(entry.noteId);
+    activeProjectIdRef.current = entry.projectId ?? null;
+    setActiveProjectIdState(entry.projectId ?? null);
     isFragmentDrawerOpenRef.current = entry.fragmentDrawerOpen;
     setIsFragmentDrawerOpen(entry.fragmentDrawerOpen);
     activeFragmentIdRef.current = entry.fragmentId;
@@ -468,6 +535,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       idx: nextIdx,
       view: cur.view,
       noteId: cur.noteId,
+      projectId: cur.projectId ?? null,
       fragmentDrawerOpen: cur.fragmentDrawerOpen,
       fragmentId: cur.fragmentId,
       overlayId: id,
@@ -567,13 +635,55 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     const saved = localStorage.getItem('noesis_projects');
     if (saved) {
       try {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          return parsed.map((p: any) => {
+            const sections: ProjectSection[] = Array.isArray(p.sections)
+              ? p.sections.map((s: any, idx: number) => ({
+                  id: String(s?.id || `sec-${idx}`),
+                  title: String(s?.title || `Bagian ${idx + 1}`),
+                  content: String(s?.content || ''),
+                  status: s?.status === 'done' ? 'done' : 'draft',
+                  order: typeof s?.order === 'number' ? s.order : idx,
+                  updatedAt: String(s?.updatedAt || p.updatedAt || p.createdAt || new Date().toISOString()),
+                }))
+              : [];
+            const milestones = Array.isArray(p.milestones) ? p.milestones : [];
+            return {
+              ...p,
+              status: normalizeProjectStatus(p.status),
+              enableWordGoal: Boolean(p.enableWordGoal),
+              targetWordCount: Number(p.targetWordCount) || 0,
+              currentWordCount:
+                sections.length > 0
+                  ? countProjectTotalWords({ ...p, sections } as Project)
+                  : Number(p.currentWordCount) || 0,
+              noteIds: Array.isArray(p.noteIds) ? p.noteIds : [],
+              fragmentIds: Array.isArray(p.fragmentIds) ? p.fragmentIds : [],
+              sections,
+              milestones,
+              progress:
+                sections.length > 0 || milestones.length > 0
+                  ? computeProjectProgress(sections, milestones)
+                  : Number(p.progress) || 0,
+              updatedAt: p.updatedAt || p.createdAt || new Date().toISOString(),
+            };
+          });
+        }
+        return INITIAL_PROJECTS;
       } catch {
         return INITIAL_PROJECTS;
       }
     }
     return INITIAL_PROJECTS;
   });
+
+  const [projectsTableMissing, setProjectsTableMissing] = useState<boolean>(false);
+  const [pendingSynthesisSeed, setPendingSynthesisSeed] = useState<{
+    items: DiscoverSourceItem[];
+    topic?: string;
+    nonce: number;
+  } | null>(null);
 
   // Auth & Sync statuses
   const [authUser, setAuthUser] = useState<User | null>(null);
@@ -590,9 +700,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const [syncStatus, setSyncStatus] = useState<'synced' | 'syncing' | 'offline' | 'error'>('synced');
   const [autoSyncNotice, setAutoSyncNotice] = useState<string | null>(null);
 
-  // Debounce refs for saving notes/fragments (4s text debounce) and exit-only auto-embedding
+  // Debounce refs for saving notes/fragments/projects and exit-only auto-embedding
   const embedTimersRef = useRef<{ [noteId: string]: ReturnType<typeof setTimeout> }>({});
   const fragEmbedTimersRef = useRef<{ [fragmentId: string]: ReturnType<typeof setTimeout> }>({});
+  const projectSaveTimersRef = useRef<{ [projectId: string]: ReturnType<typeof setTimeout> }>({});
   const dirtyEmbedNoteIdsRef = useRef<Set<string>>(new Set());
   const inFlightOrSavedVersionRef = useRef<Record<string, string>>({});
   const dirtyEmbedFragmentIdsRef = useRef<Set<string>>(new Set());
@@ -605,6 +716,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   notesRef.current = notes;
   const fragmentsRef = useRef<Fragment[]>(fragments);
   fragmentsRef.current = fragments;
+  const projectsRef = useRef<Project[]>(projects);
+  projectsRef.current = projects;
   const isReconcilingRef = useRef<boolean>(false);
   const rerunReconcileRef = useRef<boolean>(false);
 
@@ -984,6 +1097,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     embedTimersRef.current = {};
     Object.values(fragEmbedTimersRef.current).forEach((t) => clearTimeout(t));
     fragEmbedTimersRef.current = {};
+    Object.values(projectSaveTimersRef.current).forEach((t) => clearTimeout(t));
+    projectSaveTimersRef.current = {};
     dirtyEmbedNoteIdsRef.current.clear();
     inFlightOrSavedVersionRef.current = {};
     dirtyEmbedFragmentIdsRef.current.clear();
@@ -1005,9 +1120,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
     notesRef.current = [];
     fragmentsRef.current = [];
+    projectsRef.current = [];
     setNotes([]);
     setFragments([]);
     setProjects([]);
+    activeProjectIdRef.current = null;
+    setActiveProjectIdState(null);
     setApprovedConnections([]);
     setDismissedConnections([]);
     setConnectionAnalyses({});
@@ -1222,6 +1340,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     // Snapshot any unauthenticated offline drafts before potential state transitions
     const offlineNotesSnapshot = notesRef.current;
     const offlineFragmentsSnapshot = fragmentsRef.current;
+    const offlineProjectsSnapshot = projectsRef.current;
     const offlineApprovedSnapshot = approvedRef.current;
     const offlineDismissedSnapshot = dismissedRef.current;
     const offlineAnalysesSnapshot = analysesRef.current;
@@ -1230,6 +1349,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       (hasOfflineDirtyFlag || !savedUid) &&
       (offlineNotesSnapshot.length > 0 ||
         offlineFragmentsSnapshot.length > 0 ||
+        offlineProjectsSnapshot.length > 0 ||
         offlineApprovedSnapshot.length > 0 ||
         offlineDismissedSnapshot.length > 0 ||
         Object.keys(offlineAnalysesSnapshot).length > 0);
@@ -1316,6 +1436,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           analysis: offlineAnalysesSnapshot[pairKey],
           updatedAt: new Date().toISOString(),
         });
+      }
+
+      for (const proj of offlineProjectsSnapshot) {
+        const res = await upsertProjectToSupabase(proj);
+        if (res.tableMissing && isMounted) {
+          setProjectsTableMissing(true);
+          break;
+        }
       }
 
       localStorage.removeItem('noesis_offline_dirty');
@@ -1486,7 +1614,106 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         }
       }
 
+      // 6. Process queued Project Deletes & Upserts (if projects table exists)
+      const projQueueEmpty =
+        Object.keys(queue.upsertProjects).length === 0 && queue.deleteProjectIds.length === 0;
+      if (!projQueueEmpty) {
+        const projFetch = await fetchProjectsFromSupabase();
+        if (projFetch.tableMissing) {
+          if (isMounted) setProjectsTableMissing(true);
+        } else if (projFetch.projects !== null) {
+          if (isMounted) setProjectsTableMissing(false);
+          const serverProjectsMap = new Map(projFetch.projects.map((p) => [p.id, p]));
+          const localProjectsMap = new Map(projectsRef.current.map((p) => [p.id, p]));
+
+          for (const projectId of [...queue.deleteProjectIds]) {
+            const ok = await deleteProjectFromSupabase(projectId);
+            if (ok) {
+              dequeueDeleteProject(uid, projectId);
+              serverProjectsMap.delete(projectId);
+              syncedCount++;
+            }
+          }
+
+          for (const [projectId, entry] of Object.entries(queue.upsertProjects)) {
+            const localProj = localProjectsMap.get(projectId);
+            if (!localProj) {
+              dequeueUpsertProject(uid, projectId);
+              continue;
+            }
+            const serverProj = serverProjectsMap.get(projectId);
+            if (!serverProj && !entry.isNew) {
+              dequeueUpsertProject(uid, projectId, entry.updatedAt);
+              continue;
+            }
+            if (serverProj) {
+              const serverMs = Date.parse(serverProj.updatedAt || '') || 0;
+              const localMs = Date.parse(localProj.updatedAt || entry.updatedAt || '') || 0;
+              if (serverMs > localMs) {
+                dequeueUpsertProject(uid, projectId, entry.updatedAt);
+                continue;
+              }
+            }
+            const res = await upsertProjectToSupabase(localProj);
+            if (res.ok) {
+              dequeueUpsertProject(uid, projectId, localProj.updatedAt);
+              syncedCount++;
+            }
+          }
+        }
+      }
+
       return syncedCount;
+    };
+
+    const mergeServerProjectsWithLocalProtection = (
+      serverProjects: Project[],
+      pendingQueue: ReturnType<typeof loadPendingSyncQueue>
+    ): Project[] => {
+      const localMap = new Map(projectsRef.current.map((p) => [p.id, p]));
+      const merged: Project[] = [];
+      const seenIds = new Set<string>();
+
+      for (const serverProj of serverProjects) {
+        if (pendingQueue.deleteProjectIds.includes(serverProj.id)) continue;
+        seenIds.add(serverProj.id);
+
+        const localProj = localMap.get(serverProj.id);
+        const queuedUpsert = pendingQueue.upsertProjects[serverProj.id];
+        const hasPendingTimer = Boolean(projectSaveTimersRef.current[serverProj.id]);
+        const isCurrentlyOpen =
+          activeViewRef.current === 'projects' && activeProjectIdRef.current === serverProj.id;
+        if (localProj && (queuedUpsert || hasPendingTimer || isCurrentlyOpen)) {
+          const serverMs = Date.parse(serverProj.updatedAt || '') || 0;
+          const localMs = Date.parse(localProj.updatedAt || '') || 0;
+          merged.push(
+            hasPendingTimer || localMs > serverMs || (isCurrentlyOpen && localMs >= serverMs)
+              ? localProj
+              : serverProj
+          );
+        } else {
+          merged.push(serverProj);
+        }
+      }
+
+      for (const localProj of projectsRef.current) {
+        if (seenIds.has(localProj.id)) continue;
+        if (pendingQueue.deleteProjectIds.includes(localProj.id)) continue;
+        const isNewQueued = Boolean(pendingQueue.upsertProjects[localProj.id]?.isNew);
+        const hasPendingTimer = Boolean(projectSaveTimersRef.current[localProj.id]);
+        const isCurrentlyOpen =
+          activeViewRef.current === 'projects' && activeProjectIdRef.current === localProj.id;
+        if (isNewQueued || hasPendingTimer || isCurrentlyOpen) {
+          merged.push(localProj);
+        }
+      }
+
+      merged.sort(
+        (a, b) =>
+          (Date.parse(b.updatedAt || b.createdAt || '') || 0) -
+          (Date.parse(a.updatedAt || a.createdAt || '') || 0)
+      );
+      return merged;
     };
 
     const reconcileWithSupabase = async (
@@ -1513,10 +1740,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const syncedQueuedCount = await flushPendingOutbox();
 
         // Always pull fresh Supabase truth after flushing (Supabase Mutlak)
-        const [dbNotes, dbFragments, dbDiscoverConns] = await Promise.all([
+        const [dbNotes, dbFragments, dbDiscoverConns, dbProjectsRes] = await Promise.all([
           fetchNotesFromSupabase(),
           fetchFragmentsFromSupabase(),
           fetchDiscoverConnectionsFromSupabase(),
+          fetchProjectsFromSupabase(),
         ]);
 
         const remainingQueue = loadPendingSyncQueue(uid);
@@ -1553,6 +1781,18 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
             dbDiscoverConns,
             reason === 'init' && !hasOfflineDrafts && !isDifferentUser && savedUid === uid
           );
+        }
+
+        if (dbProjectsRes.tableMissing && isMounted) {
+          setProjectsTableMissing(true);
+        } else if (dbProjectsRes.projects !== null && isMounted) {
+          setProjectsTableMissing(false);
+          const mergedProjects = mergeServerProjectsWithLocalProtection(
+            dbProjectsRes.projects,
+            remainingQueue
+          );
+          projectsRef.current = mergedProjects;
+          setProjects(mergedProjects);
         }
 
         if (syncedQueuedCount > 0 && reason === 'reconnect' && isMounted) {
@@ -1598,6 +1838,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         if (isFragmentDrawerOpenRef.current && activeFragmentIdRef.current) {
           void flushFragmentOnExit(activeFragmentIdRef.current, true);
         }
+        if (activeViewRef.current === 'projects' && activeProjectIdRef.current) {
+          flushProjectSave(activeProjectIdRef.current);
+        }
         return;
       }
       if (document.visibilityState === 'visible' && isBrowserOnline()) {
@@ -1618,6 +1861,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       }
       if (isFragmentDrawerOpenRef.current && activeFragmentIdRef.current) {
         void flushFragmentOnExit(activeFragmentIdRef.current, true);
+      }
+      if (activeViewRef.current === 'projects' && activeProjectIdRef.current) {
+        flushProjectSave(activeProjectIdRef.current);
       }
     };
 
@@ -1668,6 +1914,24 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         const latestConns = await fetchDiscoverConnectionsFromSupabase();
         if (latestConns !== null && isMounted) {
           applyDbDiscoverConnections(latestConns, false);
+        }
+      },
+      async () => {
+        const q = loadPendingSyncQueue(uid);
+        if (hasPendingSyncItems(q)) {
+          await reconcileWithSupabase('realtime');
+          return;
+        }
+        const projRes = await fetchProjectsFromSupabase();
+        if (projRes.projects !== null && isMounted) {
+          setProjectsTableMissing(false);
+          const latestQueue = loadPendingSyncQueue(uid);
+          const mergedProjs = mergeServerProjectsWithLocalProtection(
+            projRes.projects,
+            latestQueue
+          );
+          projectsRef.current = mergedProjs;
+          setProjects(mergedProjs);
         }
       }
     );
@@ -2038,6 +2302,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       void flushFragmentOnExit(activeFragmentIdRef.current, true);
     }
 
+    // Flush active project workspace save when navigating away to another view
+    if (activeProjectIdRef.current) {
+      flushProjectSaveRef.current(activeProjectIdRef.current);
+    }
+
     // 1. Navigating to Home -> Always rewind cleanly to root (depth 0)
     if (view === 'home') {
       const totalPops = historyCursorRef.current;
@@ -2065,6 +2334,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         idx: 1,
         view,
         noteId: '',
+        projectId: null,
         fragmentDrawerOpen: false,
         fragmentId: null,
         overlayId: null,
@@ -2124,6 +2394,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       idx: targetIdx,
       view,
       noteId: resolvedNoteId,
+      projectId: null,
       fragmentDrawerOpen: false,
       fragmentId: null,
       overlayId: null,
@@ -2197,6 +2468,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       idx: targetIdx,
       view: baseEntry.view,
       noteId: baseEntry.noteId,
+      projectId: baseEntry.projectId ?? null,
       fragmentDrawerOpen: true,
       fragmentId: nextFragId,
       overlayId: null,
@@ -2254,10 +2526,123 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
   };
 
+  const openProject = (projectId: string) => {
+    setIsMobileDrawerOpen(false);
+    if (activeProjectIdRef.current && activeProjectIdRef.current !== projectId) {
+      flushProjectSaveRef.current(activeProjectIdRef.current);
+    }
+    const poppedOverlays = dismissTopOverlaysSync();
+    const baseCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
+    const baseEntry = historyStackRef.current[baseCursor] || initialHistoryEntry;
+
+    if (
+      poppedOverlays === 0 &&
+      baseEntry.view === 'projects' &&
+      baseEntry.projectId === projectId
+    ) {
+      return;
+    }
+
+    const targetIdx = Math.max(1, historyCursorRef.current - poppedOverlays + 1);
+    const nextEntry: NoesisHistoryEntry = {
+      __noesis: true,
+      idx: targetIdx,
+      view: 'projects',
+      noteId: '',
+      projectId,
+      fragmentDrawerOpen: false,
+      fragmentId: null,
+      overlayId: null,
+    };
+
+    if (poppedOverlays === 0) {
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      applyEntryToReactState(nextEntry);
+      window.history.pushState(nextEntry, '');
+    } else if (poppedOverlays === 1) {
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      applyEntryToReactState(nextEntry);
+      window.history.replaceState(nextEntry, '');
+    } else {
+      const delta = poppedOverlays - 1;
+      historyStackRef.current = [...historyStackRef.current.slice(0, targetIdx), nextEntry];
+      historyCursorRef.current = targetIdx;
+      expectedPopIdxRef.current = targetIdx;
+      pendingNavAfterGoRef.current = () => {
+        window.history.replaceState(nextEntry, '');
+      };
+      applyEntryToReactState(nextEntry);
+      window.history.go(-delta);
+    }
+  };
+
+  const closeProject = () => {
+    if (activeProjectIdRef.current) {
+      flushProjectSaveRef.current(activeProjectIdRef.current);
+    }
+    const poppedOverlays = dismissTopOverlaysSync();
+    let targetCursor = Math.max(0, historyCursorRef.current - poppedOverlays);
+
+    while (targetCursor > 0 && historyStackRef.current[targetCursor]?.projectId) {
+      targetCursor -= 1;
+    }
+
+    const totalPops = historyCursorRef.current - targetCursor;
+    if (totalPops > 0) {
+      const targetEntry = historyStackRef.current[targetCursor] || initialHistoryEntry;
+      historyStackRef.current = historyStackRef.current.slice(0, targetCursor + 1);
+      historyCursorRef.current = targetCursor;
+      applyEntryToReactState(targetEntry);
+      window.history.go(-totalPops);
+    } else {
+      activeProjectIdRef.current = null;
+      setActiveProjectIdState(null);
+      setActiveView('projects');
+    }
+  };
+
+  const setActiveProjectId = (id: string | null) => {
+    if (id) {
+      openProject(id);
+    } else {
+      closeProject();
+    }
+  };
+
+  const exitDeletedProject = (deletedProjectId: string) => {
+    dismissTopOverlaysSync();
+    let targetCursor = historyCursorRef.current;
+    while (
+      targetCursor > 0 &&
+      (historyStackRef.current[targetCursor]?.overlayId !== null ||
+        historyStackRef.current[targetCursor]?.projectId === deletedProjectId)
+    ) {
+      targetCursor -= 1;
+    }
+
+    const delta = historyCursorRef.current - targetCursor;
+    const targetEntry = historyStackRef.current[targetCursor] || initialHistoryEntry;
+    historyStackRef.current = historyStackRef.current.slice(0, targetCursor + 1);
+    historyCursorRef.current = targetCursor;
+    applyEntryToReactState(targetEntry);
+
+    if (delta > 0) {
+      window.history.go(-delta);
+    } else {
+      setActiveView('projects');
+    }
+  };
+
   const navigateBack = () => {
     lastLibraryNoteIdRef.current = null;
     if (historyCursorRef.current > 0) {
       window.history.back();
+      return;
+    }
+    if (activeProjectIdRef.current) {
+      closeProject();
       return;
     }
     if (activeViewRef.current === 'editor' && activeNoteIdRef.current) {
@@ -2345,6 +2730,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     // 5. PROJECTS TAB
     if (targetTab === 'projects') {
       if (activeViewRef.current === 'projects') {
+        if (activeProjectIdRef.current) {
+          closeProject();
+          return;
+        }
         scrollToTop('projects');
         return;
       }
@@ -2477,6 +2866,12 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           }
         }
         if (
+          prevEntry?.projectId &&
+          (!incoming.projectId || incoming.projectId !== prevEntry.projectId)
+        ) {
+          flushProjectSaveRef.current(prevEntry.projectId);
+        }
+        if (
           prevEntry?.fragmentDrawerOpen &&
           prevEntry.fragmentId &&
           (!incoming.fragmentDrawerOpen || incoming.fragmentId !== prevEntry.fragmentId)
@@ -2505,6 +2900,22 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           return;
         }
         resolvedEntry = initialHistoryEntry;
+        window.history.replaceState(resolvedEntry, '');
+      }
+
+      if (
+        resolvedEntry.view === 'projects' &&
+        resolvedEntry.projectId &&
+        !projectsRef.current.some((p) => p.id === resolvedEntry.projectId)
+      ) {
+        if (nextIdx > 0) {
+          window.history.back();
+          return;
+        }
+        resolvedEntry = {
+          ...resolvedEntry,
+          projectId: null,
+        };
         window.history.replaceState(resolvedEntry, '');
       }
 
@@ -2696,30 +3107,501 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     toggleStarFragment(id);
   };
 
-  const toggleProjectMilestone = (projectId: string, milestoneId: string) => {
-    setProjects((prev) =>
-      prev.map((p) => {
-        if (p.id === projectId) {
-          const updatedMilestones = p.milestones.map((m) =>
-            m.id === milestoneId ? { ...m, completed: !m.completed } : m
-          );
-          const completedCount = updatedMilestones.filter((m) => m.completed).length;
-          const progress = Math.round((completedCount / updatedMilestones.length) * 100);
-          return { ...p, milestones: updatedMilestones, progress };
-        }
-        return p;
-      })
-    );
+  const syncProjectRemote = (project: Project, isNew = false) => {
+    if (projectSaveTimersRef.current[project.id]) {
+      clearTimeout(projectSaveTimersRef.current[project.id]);
+      delete projectSaveTimersRef.current[project.id];
+    }
+    const uid = authUserRef.current?.id;
+    if (canRemoteSync() && uid) {
+      enqueueUpsertProject(uid, project.id, project.updatedAt, isNew);
+      if (isBrowserOnline()) {
+        upsertProjectToSupabase(project)
+          .then((res) => {
+            if (res.tableMissing) {
+              setProjectsTableMissing(true);
+              return;
+            }
+            if (res.ok) {
+              setProjectsTableMissing(false);
+              if (authUserRef.current?.id === uid) {
+                dequeueUpsertProject(uid, project.id, project.updatedAt);
+              }
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
   };
 
-  // Push all existing local notes & fragments to Supabase
+  const flushProjectSave = (projectId: string) => {
+    if (!projectId) return;
+    if (projectSaveTimersRef.current[projectId]) {
+      clearTimeout(projectSaveTimersRef.current[projectId]);
+      delete projectSaveTimersRef.current[projectId];
+    }
+    const latest = projectsRef.current.find((p) => p.id === projectId);
+    if (!latest) return;
+    const uid = authUserRef.current?.id;
+    if (!canRemoteSync() || !uid) return;
+    if (!isBrowserOnline()) {
+      setSyncStatus('offline');
+      return;
+    }
+    upsertProjectToSupabase(latest)
+      .then((res) => {
+        if (res.tableMissing) {
+          setProjectsTableMissing(true);
+          return;
+        }
+        if (res.ok) {
+          setProjectsTableMissing(false);
+          if (authUserRef.current?.id === uid) {
+            dequeueUpsertProject(uid, latest.id, latest.updatedAt);
+          }
+        }
+      })
+      .catch(console.warn);
+  };
+  flushProjectSaveRef.current = flushProjectSave;
+
+  const scheduleProjectSave = (project: Project) => {
+    const uid = authUserRef.current?.id;
+    if (canRemoteSync() && uid) {
+      enqueueUpsertProject(uid, project.id, project.updatedAt, false);
+      if (projectSaveTimersRef.current[project.id]) {
+        clearTimeout(projectSaveTimersRef.current[project.id]);
+      }
+      if (!isBrowserOnline()) {
+        setSyncStatus('offline');
+        return;
+      }
+      projectSaveTimersRef.current[project.id] = setTimeout(() => {
+        delete projectSaveTimersRef.current[project.id];
+        flushProjectSave(project.id);
+      }, 1500);
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
+  };
+
+  const createProject = ({
+    title,
+    description = '',
+    enableWordGoal = false,
+    targetWordCount = 0,
+    deadline,
+    initialSections = [],
+    initialMilestones = [],
+    noteIds = [],
+    fragmentIds = [],
+  }: {
+    title: string;
+    description?: string;
+    enableWordGoal?: boolean;
+    targetWordCount?: number;
+    deadline?: string;
+    initialSections?: string[];
+    initialMilestones?: string[];
+    noteIds?: string[];
+    fragmentIds?: string[];
+  }): string => {
+    const now = new Date().toISOString();
+    const ts = Date.now();
+    const newId = `proj-${ts}`;
+
+    const cleanSectionTitles = initialSections.map((s) => s.trim()).filter(Boolean);
+    const cleanMilestoneTitles = initialMilestones.map((m) => m.trim()).filter(Boolean);
+
+    let sections: ProjectSection[] = [];
+    if (cleanSectionTitles.length > 0) {
+      sections = cleanSectionTitles.map((sTitle, idx) => ({
+        id: `sec-${ts}-${idx}`,
+        title: sTitle,
+        content: '<p></p>',
+        status: 'draft',
+        order: idx,
+        updatedAt: now,
+      }));
+    } else if (cleanMilestoneTitles.length === 0) {
+      sections = [
+        {
+          id: `sec-${ts}-0`,
+          title: 'Draf Utama',
+          content: '<p></p>',
+          status: 'draft',
+          order: 0,
+          updatedAt: now,
+        },
+      ];
+    }
+
+    const milestones = cleanMilestoneTitles.map((mTitle, idx) => ({
+      id: `ms-${ts}-${idx}`,
+      title: mTitle,
+      completed: false,
+    }));
+
+    const newProject: Project = {
+      id: newId,
+      title: title.trim() || 'Project Baru',
+      description: description.trim(),
+      status: 'active',
+      progress: 0,
+      enableWordGoal: Boolean(enableWordGoal),
+      targetWordCount: enableWordGoal ? Math.max(0, Number(targetWordCount) || 0) : 0,
+      currentWordCount: 0,
+      deadline: deadline?.trim() || undefined,
+      noteIds: Array.from(new Set(noteIds)),
+      fragmentIds: Array.from(new Set(fragmentIds)),
+      sections,
+      milestones,
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const next = [newProject, ...projectsRef.current];
+    projectsRef.current = next;
+    setProjects(next);
+    syncProjectRemote(newProject, true);
+    return newId;
+  };
+
+  const updateProject = (id: string, updates: Partial<Project>) => {
+    const now = new Date().toISOString();
+    let updatedTarget: Project | null = null;
+    const next = projectsRef.current.map((p) => {
+      if (p.id !== id) return p;
+      const mergedSections = updates.sections ?? p.sections ?? [];
+      const mergedMilestones = updates.milestones ?? p.milestones ?? [];
+      const computedProgress =
+        updates.progress !== undefined
+          ? updates.progress
+          : updates.sections !== undefined || updates.milestones !== undefined
+          ? computeProjectProgress(mergedSections, mergedMilestones)
+          : p.progress;
+      const computedWords =
+        updates.sections !== undefined
+          ? countProjectTotalWords({ ...p, sections: mergedSections })
+          : updates.currentWordCount ?? p.currentWordCount;
+      updatedTarget = {
+        ...p,
+        ...updates,
+        status: normalizeProjectStatus(updates.status ?? p.status),
+        sections: mergedSections,
+        milestones: mergedMilestones,
+        progress: computedProgress,
+        currentWordCount: computedWords,
+        updatedAt: now,
+      };
+      return updatedTarget;
+    });
+    if (!updatedTarget) return;
+    projectsRef.current = next;
+    setProjects(next);
+    syncProjectRemote(updatedTarget, false);
+  };
+
+  const deleteProject = (id: string) => {
+    if (projectSaveTimersRef.current[id]) {
+      clearTimeout(projectSaveTimersRef.current[id]);
+      delete projectSaveTimersRef.current[id];
+    }
+    const next = projectsRef.current.filter((p) => p.id !== id);
+    projectsRef.current = next;
+    setProjects(next);
+    exitDeletedProject(id);
+    const uid = authUserRef.current?.id;
+    if (canRemoteSync() && uid) {
+      enqueueDeleteProject(uid, id);
+      if (isBrowserOnline()) {
+        deleteProjectFromSupabase(id)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueDeleteProject(uid, id);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
+  };
+
+  const addProjectSection = (
+    projectId: string,
+    title: string,
+    initialContent = '<p></p>'
+  ): string => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return '';
+    const sorted = getSortedProjectSections(target);
+    const now = new Date().toISOString();
+    const newSecId = `sec-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const newSection: ProjectSection = {
+      id: newSecId,
+      title: title.trim() || `Bagian ${sorted.length + 1}`,
+      content: initialContent.trim() ? initialContent : '<p></p>',
+      status: 'draft',
+      order: sorted.length,
+      updatedAt: now,
+    };
+    const nextSections = [...sorted, newSection].map((s, idx) => ({ ...s, order: idx }));
+    updateProject(projectId, { sections: nextSections });
+    return newSecId;
+  };
+
+  const updateProjectSection = (
+    projectId: string,
+    sectionId: string,
+    updates: Partial<Pick<ProjectSection, 'title' | 'content' | 'status' | 'order'>>
+  ) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const now = new Date().toISOString();
+    const nextSections = (target.sections || []).map((sec) =>
+      sec.id === sectionId
+        ? {
+            ...sec,
+            ...updates,
+            updatedAt: now,
+          }
+        : sec
+    );
+    const nextProgress = computeProjectProgress(nextSections, target.milestones);
+    const nextWords = countProjectTotalWords({ ...target, sections: nextSections });
+    const updatedProject: Project = {
+      ...target,
+      sections: nextSections,
+      progress: nextProgress,
+      currentWordCount: nextWords,
+      updatedAt: now,
+    };
+
+    projectsRef.current = projectsRef.current.map((p) =>
+      p.id === projectId ? updatedProject : p
+    );
+    setProjects(projectsRef.current);
+    scheduleProjectSave(updatedProject);
+  };
+
+  const deleteProjectSection = (projectId: string, sectionId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const nextSections = getSortedProjectSections(target)
+      .filter((sec) => sec.id !== sectionId)
+      .map((sec, idx) => ({ ...sec, order: idx }));
+    updateProject(projectId, { sections: nextSections });
+  };
+
+  const moveProjectSection = (
+    projectId: string,
+    sectionId: string,
+    direction: 'up' | 'down'
+  ) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const sorted = getSortedProjectSections(target);
+    const idx = sorted.findIndex((s) => s.id === sectionId);
+    if (idx === -1) return;
+    const swapIdx = direction === 'up' ? idx - 1 : idx + 1;
+    if (swapIdx < 0 || swapIdx >= sorted.length) return;
+    const reordered = [...sorted];
+    const [moved] = reordered.splice(idx, 1);
+    reordered.splice(swapIdx, 0, moved);
+    const now = new Date().toISOString();
+    const normalized = reordered.map((s, orderIdx) => ({
+      ...s,
+      order: orderIdx,
+      updatedAt: s.id === sectionId ? now : s.updatedAt,
+    }));
+    updateProject(projectId, { sections: normalized });
+  };
+
+  const toggleProjectSectionStatus = (projectId: string, sectionId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const now = new Date().toISOString();
+    const nextSections: ProjectSection[] = (target.sections || []).map((sec) =>
+      sec.id === sectionId
+        ? {
+            ...sec,
+            status: sec.status === 'done' ? 'draft' : 'done',
+            updatedAt: now,
+          }
+        : sec
+    );
+    updateProject(projectId, { sections: nextSections });
+  };
+
+  const convertMilestonesToSections = (projectId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target || target.milestones.length === 0) return;
+    const now = new Date().toISOString();
+    const existing = getSortedProjectSections(target);
+    const converted: ProjectSection[] = target.milestones.map((m, idx) => ({
+      id: `sec-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 5)}`,
+      title: m.title,
+      content: '<p></p>',
+      status: m.completed ? 'done' : 'draft',
+      order: existing.length + idx,
+      updatedAt: now,
+    }));
+    updateProject(projectId, {
+      sections: [...existing, ...converted],
+    });
+  };
+
+  const saveProjectMasterCopyToLibrary = (projectId: string): string | null => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return null;
+    flushProjectSave(projectId);
+
+    const compiledHtml = compileProjectMasterHtml(target);
+    const plainText = cleanTextForEmbedding(compiledHtml);
+    const now = new Date().toISOString();
+    const newId = `note-${Date.now()}`;
+    const note: Note = {
+      id: newId,
+      title: target.title || 'Master Karya Project',
+      content: compiledHtml || '<p></p>',
+      excerpt: plainText.slice(0, 180) || 'Salinan Master Utuh dari Project',
+      type: 'thought',
+      tags: ['project-master'],
+      source: `Project: ${target.title}`,
+      favorite: false,
+      archived: false,
+      relatedNoteIds: Array.from(new Set(target.noteIds || [])),
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const nextNotes = [note, ...notesRef.current];
+    notesRef.current = nextNotes;
+    setNotes(nextNotes);
+
+    const uid = authUserRef.current?.id;
+    if (canRemoteSync() && uid) {
+      enqueueUpsertNote(uid, note.id, now, true);
+      if (isBrowserOnline()) {
+        syncNoteWithFallback(note)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertNote(uid, note.id, now);
+            }
+          })
+          .catch(console.warn);
+      } else {
+        setSyncStatus('offline');
+      }
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
+
+    return newId;
+  };
+
+  const toggleProjectMilestone = (projectId: string, milestoneId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const updatedMilestones = target.milestones.map((m) =>
+      m.id === milestoneId ? { ...m, completed: !m.completed } : m
+    );
+    updateProject(projectId, {
+      milestones: updatedMilestones,
+      progress: computeProjectProgress(target.sections, updatedMilestones),
+    });
+  };
+
+  const addProjectMilestone = (projectId: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const updatedMilestones = [
+      ...target.milestones,
+      { id: `ms-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, title: trimmed, completed: false },
+    ];
+    updateProject(projectId, {
+      milestones: updatedMilestones,
+      progress: computeProjectProgress(target.sections, updatedMilestones),
+    });
+  };
+
+  const updateProjectMilestone = (projectId: string, milestoneId: string, title: string) => {
+    const trimmed = title.trim();
+    if (!trimmed) return;
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const updatedMilestones = target.milestones.map((m) =>
+      m.id === milestoneId ? { ...m, title: trimmed } : m
+    );
+    updateProject(projectId, { milestones: updatedMilestones });
+  };
+
+  const deleteProjectMilestone = (projectId: string, milestoneId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    const updatedMilestones = target.milestones.filter((m) => m.id !== milestoneId);
+    updateProject(projectId, {
+      milestones: updatedMilestones,
+      progress: computeProjectProgress(target.sections, updatedMilestones),
+    });
+  };
+
+  const linkItemToProject = (projectId: string, kind: 'note' | 'fragment', itemId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    if (kind === 'note') {
+      if (target.noteIds.includes(itemId)) return;
+      updateProject(projectId, { noteIds: [...target.noteIds, itemId] });
+    } else {
+      if ((target.fragmentIds || []).includes(itemId)) return;
+      updateProject(projectId, { fragmentIds: [...(target.fragmentIds || []), itemId] });
+    }
+  };
+
+  const unlinkItemFromProject = (projectId: string, kind: 'note' | 'fragment', itemId: string) => {
+    const target = projectsRef.current.find((p) => p.id === projectId);
+    if (!target) return;
+    if (kind === 'note') {
+      updateProject(projectId, { noteIds: target.noteIds.filter((id) => id !== itemId) });
+    } else {
+      updateProject(projectId, {
+        fragmentIds: (target.fragmentIds || []).filter((id) => id !== itemId),
+      });
+    }
+  };
+
+  const sendToDiscoverSynthesis = (items: DiscoverSourceItem[], topicHint?: string) => {
+    setPendingSynthesisSeed({
+      items,
+      topic: topicHint,
+      nonce: Date.now(),
+    });
+    setDiscoverTab('synthesis');
+    setActiveView('discover');
+  };
+
+  const clearPendingSynthesisSeed = () => {
+    setPendingSynthesisSeed(null);
+  };
+
+  // Push all existing local notes, fragments & projects to Supabase
   const syncAllToSupabase = async () => {
     if (!isSupabaseConfigured()) {
-      return { success: false, notesCount: 0, fragmentsCount: 0 };
+      return { success: false, notesCount: 0, fragmentsCount: 0, projectsCount: 0 };
     }
     setSyncStatus('syncing');
     let notesCount = 0;
     let fragmentsCount = 0;
+    let projectsCount = 0;
 
     for (const note of notes) {
       const ok = await embedAndSyncNote(note);
@@ -2734,8 +3616,20 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       if (ok) fragmentsCount++;
     }
 
+    for (const proj of projectsRef.current) {
+      const res = await upsertProjectToSupabase(proj);
+      if (res.tableMissing) {
+        setProjectsTableMissing(true);
+        break;
+      }
+      if (res.ok) {
+        setProjectsTableMissing(false);
+        projectsCount++;
+      }
+    }
+
     setSyncStatus('synced');
-    return { success: true, notesCount, fragmentsCount };
+    return { success: true, notesCount, fragmentsCount, projectsCount };
   };
 
   // Manual embed single note
@@ -3796,7 +4690,26 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         deleteRelic,
         toggleStarRelic,
         projects,
+        activeProjectId,
+        setActiveProjectId,
+        projectsTableMissing,
+        createProject,
+        updateProject,
+        deleteProject,
+        flushProjectSave,
+        addProjectSection,
+        updateProjectSection,
+        deleteProjectSection,
+        moveProjectSection,
+        toggleProjectSectionStatus,
+        convertMilestonesToSections,
+        saveProjectMasterCopyToLibrary,
         toggleProjectMilestone,
+        addProjectMilestone,
+        updateProjectMilestone,
+        deleteProjectMilestone,
+        linkItemToProject,
+        unlinkItemFromProject,
         authUser,
         authLoading,
         offlineBypass,
@@ -3840,6 +4753,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         synthesisTargetNoteId,
         startUpdateSynthesis,
         clearSynthesisTarget,
+        pendingSynthesisSeed,
+        sendToDiscoverSynthesis,
+        clearPendingSynthesisSeed,
         saveSynthesizedNote,
         updateSynthesizedNote,
       }}

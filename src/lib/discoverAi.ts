@@ -283,6 +283,145 @@ export const computeTopicClusters = (
   return clusters;
 };
 
+export interface ClusterSynthesisMatch {
+  note: Note;
+  overlapCount: number;
+  totalClusterItems: number;
+  coveredItemIds: Set<string>;
+  isFullMatch: boolean;
+}
+
+export interface ClusterSynthesisCoverage {
+  coveredBySynthesis: ClusterSynthesisMatch | null;
+  isFullySynthesized: boolean;
+  newItemsCount: number;
+}
+
+/**
+ * Resolves all source Note & Fragment IDs incorporated into a Synthesis note
+ * using relatedNoteIds, approvedConnections (for fragments), and legacy HTML footer fallback.
+ */
+export const resolveSynthesisSourceIds = (
+  synthesisNote: Note,
+  notes: Note[],
+  fragments: Fragment[],
+  approvedConnections: string[]
+): Set<string> => {
+  const coveredIds = new Set<string>();
+
+  for (const relId of synthesisNote.relatedNoteIds || []) {
+    if (relId && relId !== synthesisNote.id) {
+      coveredIds.add(relId);
+    }
+  }
+
+  for (const pairKey of approvedConnections) {
+    const parts = pairKey.split('::');
+    if (parts.length !== 2) continue;
+    const otherId =
+      parts[0] === synthesisNote.id
+        ? parts[1]
+        : parts[1] === synthesisNote.id
+        ? parts[0]
+        : null;
+    if (otherId) {
+      coveredIds.add(otherId);
+    }
+  }
+
+  const legacyEntries = parseLegacySynthesisFooterItems(synthesisNote.content || '');
+  if (legacyEntries.length > 0) {
+    for (const entry of legacyEntries) {
+      const targetTitle = entry.title.toLowerCase();
+      if (entry.kind === 'fragment') {
+        const frag = fragments.find(
+          (f) => !coveredIds.has(f.id) && (f.title || 'Tanpa Judul').trim().toLowerCase() === targetTitle
+        );
+        if (frag) coveredIds.add(frag.id);
+      } else {
+        const note = notes.find(
+          (n) =>
+            n.id !== synthesisNote.id &&
+            !coveredIds.has(n.id) &&
+            (n.title || 'Tanpa Judul').trim().toLowerCase() === targetTitle
+        );
+        if (note) coveredIds.add(note.id);
+      }
+    }
+  }
+
+  return coveredIds;
+};
+
+export const resolveSynthesisSourceIdsMap = (
+  synthesisNotes: Note[],
+  notes: Note[],
+  fragments: Fragment[],
+  approvedConnections: string[]
+): Map<string, Set<string>> => {
+  const map = new Map<string, Set<string>>();
+  for (const sNote of synthesisNotes) {
+    if (sNote.archived || sNote.type !== 'synthesis') continue;
+    map.set(sNote.id, resolveSynthesisSourceIds(sNote, notes, fragments, approvedConnections));
+  }
+  return map;
+};
+
+/**
+ * Evaluates whether a TopicClusterCandidate is already fully or partially covered
+ * by an existing non-archived Synthesis document.
+ */
+export const evaluateClusterSynthesisCoverage = (
+  cluster: TopicClusterCandidate,
+  synthesisNotes: Note[],
+  sourceIdsBySynthesisId: Map<string, Set<string>>
+): ClusterSynthesisCoverage => {
+  let bestMatch: ClusterSynthesisMatch | null = null;
+  const totalClusterItems = cluster.items.length;
+
+  for (const sNote of synthesisNotes) {
+    if (sNote.archived || sNote.type !== 'synthesis') continue;
+    const coveredSet = sourceIdsBySynthesisId.get(sNote.id);
+    if (!coveredSet || coveredSet.size === 0) continue;
+
+    const matchedIds = new Set<string>();
+    for (const item of cluster.items) {
+      if (coveredSet.has(item.id)) {
+        matchedIds.add(item.id);
+      }
+    }
+
+    const overlapCount = matchedIds.size;
+    const isFullMatch = totalClusterItems > 0 && overlapCount === totalClusterItems;
+
+    // Only treat as meaningful match if 100% covered OR at least 2 items overlap
+    if (!isFullMatch && overlapCount < 2) continue;
+
+    if (
+      !bestMatch ||
+      (isFullMatch && !bestMatch.isFullMatch) ||
+      (isFullMatch === bestMatch.isFullMatch && overlapCount > bestMatch.overlapCount) ||
+      (isFullMatch === bestMatch.isFullMatch &&
+        overlapCount === bestMatch.overlapCount &&
+        new Date(sNote.updatedAt).getTime() > new Date(bestMatch.note.updatedAt).getTime())
+    ) {
+      bestMatch = {
+        note: sNote,
+        overlapCount,
+        totalClusterItems,
+        coveredItemIds: matchedIds,
+        isFullMatch,
+      };
+    }
+  }
+
+  return {
+    coveredBySynthesis: bestMatch,
+    isFullySynthesized: Boolean(bestMatch?.isFullMatch),
+    newItemsCount: bestMatch ? totalClusterItems - bestMatch.overlapCount : totalClusterItems,
+  };
+};
+
 export interface RelatedNoteSuggestion {
   note: Note;
   reason: 'vector' | 'tag-concept';
@@ -454,6 +593,7 @@ export const requestSynthesizeDocument = async (payload: {
     ...json.result,
     modelUsed: json.modelUsed,
     fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
   };
 };
 
@@ -476,6 +616,7 @@ export const requestAnalyzeConnection = async (
     ...json.result,
     modelUsed: json.modelUsed,
     fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
   };
 };
 
@@ -497,5 +638,6 @@ export const requestSummarizeCluster = async (
     ...json.result,
     modelUsed: json.modelUsed,
     fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
   };
 };

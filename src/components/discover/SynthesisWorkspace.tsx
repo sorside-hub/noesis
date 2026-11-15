@@ -6,6 +6,7 @@ import Link from '@tiptap/extension-link';
 import { useNoesis } from '../../context/NoesisContext';
 import { useBackOverlay } from '../../hooks/useBackOverlay';
 import { createTiptapClipboardProps } from '../../lib/tiptapClipboard';
+import { AiProcessBadge } from './AiProcessBadge';
 import {
   DiscoverSourceItem,
   SynthesisResult,
@@ -625,9 +626,18 @@ export const SynthesisWorkspace: React.FC<SynthesisWorkspaceProps> = ({
               <span>Kembali ke Pilihan Bahan ({selectedItems.length})</span>
             </button>
 
-            <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
-              Tinjau & edit seperlunya sebelum menyimpan ke Library
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+                Tinjau &amp; edit seperlunya sebelum menyimpan ke Library
+              </span>
+              <AiProcessBadge
+                featureName={baseSynthesisNote ? 'Pembaruan Sintesis' : 'Synthesis Dokumen'}
+                modelUsed={synthesisOutput.modelUsed}
+                fallbackUsed={synthesisOutput.fallbackUsed}
+                aiTrace={synthesisOutput.aiTrace}
+                overlayKey="ai-trace-synthesis"
+              />
+            </div>
           </div>
 
           {/* Synthesis Insight Callout */}

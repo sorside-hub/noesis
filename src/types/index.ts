@@ -49,23 +49,39 @@ export interface Fragment {
 
 export type Relic = Fragment;
 
+export type ProjectStatus = 'active' | 'review' | 'completed' | 'archived';
+
 export interface Milestone {
   id: string;
   title: string;
   completed: boolean;
 }
 
+export interface ProjectSection {
+  id: string;
+  title: string;
+  content: string; // HTML from Tiptap
+  status: 'draft' | 'done';
+  order: number;
+  updatedAt: string;
+}
+
 export interface Project {
   id: string;
   title: string;
   description: string;
-  status: 'drafting' | 'review' | 'in_progress' | 'completed';
+  status: ProjectStatus;
   progress: number;
+  enableWordGoal?: boolean;
   targetWordCount: number;
   currentWordCount: number;
-  deadline: string;
+  deadline?: string;
   noteIds: string[];
+  fragmentIds: string[];
+  sections: ProjectSection[];
   milestones: Milestone[];
+  createdAt?: string;
+  updatedAt: string;
 }
 
 // ============================================================================
@@ -90,6 +106,26 @@ export interface DiscoverSourceItem {
 
 export type SynthesisStyle = 'structured' | 'essay' | 'brief';
 
+export interface AiProcessStep {
+  step: number;
+  label: string;
+  model?: string;
+  role?: 'primary' | 'fallback' | 'wait';
+  status: 'success' | 'failed' | 'waiting';
+  detail?: string;
+  durationMs?: number;
+}
+
+export interface AiExecutionTrace {
+  primaryModel: string;
+  fallbackModel: string;
+  modelUsed: string;
+  fallbackUsed: boolean;
+  retriedPrimary: boolean;
+  totalDurationMs: number;
+  steps: AiProcessStep[];
+}
+
 export interface SynthesisResult {
   title: string;
   summary: string;
@@ -98,6 +134,7 @@ export interface SynthesisResult {
   synthesisNotes: string;
   modelUsed?: string;
   fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
 }
 
 export type ConnectionRelationshipType =
@@ -114,6 +151,7 @@ export interface ConnectionAnalysis {
   synthesisPotential: string;
   modelUsed?: string;
   fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
 }
 
 export interface ConnectionCandidate {
@@ -138,6 +176,7 @@ export interface TopicClusterSummary {
   keyAngles: string[];
   modelUsed?: string;
   fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
 }
 
 export type DiscoverConnectionStatus = 'pending' | 'approved' | 'dismissed';

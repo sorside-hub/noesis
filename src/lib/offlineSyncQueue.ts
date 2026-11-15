@@ -17,6 +17,8 @@ export interface PendingSyncQueue {
   deleteFragmentIds: string[];
   upsertConnections: Record<string, { pairKey: string; updatedAt: string }>;
   deleteConnectionPairKeys: string[];
+  upsertProjects: Record<string, QueuedUpsertEntry>;
+  deleteProjectIds: string[];
 }
 
 export const createEmptySyncQueue = (userId?: string): PendingSyncQueue => ({
@@ -27,6 +29,8 @@ export const createEmptySyncQueue = (userId?: string): PendingSyncQueue => ({
   deleteFragmentIds: [],
   upsertConnections: {},
   deleteConnectionPairKeys: [],
+  upsertProjects: {},
+  deleteProjectIds: [],
 });
 
 export const loadPendingSyncQueue = (expectedUserId?: string): PendingSyncQueue => {
@@ -57,6 +61,11 @@ export const loadPendingSyncQueue = (expectedUserId?: string): PendingSyncQueue 
       deleteConnectionPairKeys: Array.isArray(parsed.deleteConnectionPairKeys)
         ? parsed.deleteConnectionPairKeys
         : [],
+      upsertProjects:
+        parsed.upsertProjects && typeof parsed.upsertProjects === 'object'
+          ? parsed.upsertProjects
+          : {},
+      deleteProjectIds: Array.isArray(parsed.deleteProjectIds) ? parsed.deleteProjectIds : [],
     };
   } catch {
     return createEmptySyncQueue(expectedUserId);
@@ -90,7 +99,9 @@ export const hasPendingSyncItems = (queue: PendingSyncQueue): boolean => {
     Object.keys(queue.upsertFragments).length > 0 ||
     queue.deleteFragmentIds.length > 0 ||
     Object.keys(queue.upsertConnections).length > 0 ||
-    queue.deleteConnectionPairKeys.length > 0
+    queue.deleteConnectionPairKeys.length > 0 ||
+    Object.keys(queue.upsertProjects).length > 0 ||
+    queue.deleteProjectIds.length > 0
   );
 };
 
@@ -101,7 +112,9 @@ export const countPendingSyncItems = (queue: PendingSyncQueue): number => {
     Object.keys(queue.upsertFragments).length +
     queue.deleteFragmentIds.length +
     Object.keys(queue.upsertConnections).length +
-    queue.deleteConnectionPairKeys.length
+    queue.deleteConnectionPairKeys.length +
+    Object.keys(queue.upsertProjects).length +
+    queue.deleteProjectIds.length
   );
 };
 
@@ -249,5 +262,56 @@ export const enqueueDeleteConnection = (userId: string, pairKey: string) => {
 export const dequeueDeleteConnection = (userId: string, pairKey: string) => {
   const queue = loadPendingSyncQueue(userId);
   queue.deleteConnectionPairKeys = queue.deleteConnectionPairKeys.filter((k) => k !== pairKey);
+  savePendingSyncQueue(queue);
+};
+
+export const enqueueUpsertProject = (
+  userId: string,
+  projectId: string,
+  updatedAt: string,
+  isNew = false
+) => {
+  const queue = loadPendingSyncQueue(userId);
+  const existing = queue.upsertProjects[projectId];
+  queue.deleteProjectIds = queue.deleteProjectIds.filter((id) => id !== projectId);
+  queue.upsertProjects[projectId] = {
+    id: projectId,
+    updatedAt,
+    isNew: Boolean(isNew || existing?.isNew),
+  };
+  savePendingSyncQueue(queue);
+};
+
+export const dequeueUpsertProject = (
+  userId: string,
+  projectId: string,
+  syncedUpdatedAt?: string
+) => {
+  const queue = loadPendingSyncQueue(userId);
+  const existing = queue.upsertProjects[projectId];
+  if (!existing) return;
+  if (
+    syncedUpdatedAt &&
+    Date.parse(existing.updatedAt) > Date.parse(syncedUpdatedAt)
+  ) {
+    return;
+  }
+  delete queue.upsertProjects[projectId];
+  savePendingSyncQueue(queue);
+};
+
+export const enqueueDeleteProject = (userId: string, projectId: string) => {
+  const queue = loadPendingSyncQueue(userId);
+  const wasCreatedOfflineOnly = Boolean(queue.upsertProjects[projectId]?.isNew);
+  delete queue.upsertProjects[projectId];
+  if (!wasCreatedOfflineOnly && !queue.deleteProjectIds.includes(projectId)) {
+    queue.deleteProjectIds.push(projectId);
+  }
+  savePendingSyncQueue(queue);
+};
+
+export const dequeueDeleteProject = (userId: string, projectId: string) => {
+  const queue = loadPendingSyncQueue(userId);
+  queue.deleteProjectIds = queue.deleteProjectIds.filter((id) => id !== projectId);
   savePendingSyncQueue(queue);
 };

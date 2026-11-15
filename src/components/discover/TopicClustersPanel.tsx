@@ -9,6 +9,9 @@ import { VectorMapResult } from '../../lib/supabase';
 import {
   computeTopicClusters,
   requestSummarizeCluster,
+  resolveSynthesisSourceIdsMap,
+  evaluateClusterSynthesisCoverage,
+  ClusterSynthesisCoverage,
 } from '../../lib/discoverAi';
 import {
   Layers,
@@ -22,7 +25,11 @@ import {
   Loader2,
   AlertCircle,
   Compass,
+  Eye,
+  EyeOff,
+  CheckCircle2,
 } from 'lucide-react';
+import { AiProcessBadge } from './AiProcessBadge';
 
 interface TopicClustersPanelProps {
   vectorMap: VectorMapResult | null;
@@ -52,12 +59,15 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
   const {
     notes,
     fragments,
+    approvedConnections,
+    startUpdateSynthesis,
     setActiveNoteId,
     setActiveView,
     openFragmentDrawer,
   } = useNoesis();
 
   const [density, setDensity] = useState<ClusterDensity>('standard');
+  const [showSynthesizedClusters, setShowSynthesizedClusters] = useState(false);
   const [expandedClusterIds, setExpandedClusterIds] = useState<Record<string, boolean>>({});
   const [excludedItemIdsByCluster, setExcludedItemIdsByCluster] = useState<
     Record<string, Set<string>>
@@ -72,6 +82,46 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
       maxClusters: 6,
     });
   }, [notes, fragments, vectorMap, density]);
+
+  const synthesisNotes = useMemo(
+    () => notes.filter((n) => !n.archived && n.type === 'synthesis'),
+    [notes]
+  );
+
+  const sourceIdsBySynthesisId = useMemo(
+    () => resolveSynthesisSourceIdsMap(synthesisNotes, notes, fragments, approvedConnections),
+    [synthesisNotes, notes, fragments, approvedConnections]
+  );
+
+  const { activeClusters, synthesizedClusters, coverageByClusterId } = useMemo(() => {
+    const active: TopicClusterCandidate[] = [];
+    const synthesized: TopicClusterCandidate[] = [];
+    const map = new Map<string, ClusterSynthesisCoverage>();
+
+    for (const cluster of clusters) {
+      const coverage = evaluateClusterSynthesisCoverage(
+        cluster,
+        synthesisNotes,
+        sourceIdsBySynthesisId
+      );
+      map.set(cluster.id, coverage);
+      if (coverage.isFullySynthesized) {
+        synthesized.push(cluster);
+      } else {
+        active.push(cluster);
+      }
+    }
+
+    return {
+      activeClusters: active,
+      synthesizedClusters: synthesized,
+      coverageByClusterId: map,
+    };
+  }, [clusters, synthesisNotes, sourceIdsBySynthesisId]);
+
+  const displayedClusters = showSynthesizedClusters
+    ? [...activeClusters, ...synthesizedClusters]
+    : activeClusters;
 
   const toggleExpandCluster = (clusterId: string) => {
     setExpandedClusterIds((prev) => ({
@@ -175,11 +225,33 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
             </div>
           </div>
 
-          <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
-            {clusters.length > 0
-              ? `${clusters.length} kelompok potensial ditemukan`
-              : 'Belum ada kelompok yang cukup padu'}
-          </span>
+          <div className="flex flex-wrap items-center gap-2.5">
+            {synthesizedClusters.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setShowSynthesizedClusters((prev) => !prev)}
+                className={`px-2.5 py-1 rounded-lg border text-[11px] font-medium transition-colors flex items-center gap-1.5 ${
+                  showSynthesizedClusters
+                    ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
+                    : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+                }`}
+              >
+                {showSynthesizedClusters ? <EyeOff size={12} /> : <Eye size={12} />}
+                <span>
+                  {showSynthesizedClusters
+                    ? `Sembunyikan Sudah Disintesis (${synthesizedClusters.length})`
+                    : `Tampilkan Sudah Disintesis (${synthesizedClusters.length})`}
+                </span>
+              </button>
+            )}
+            <span className="text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+              {activeClusters.length > 0
+                ? `${activeClusters.length} kelompok potensial ditemukan`
+                : synthesizedClusters.length > 0
+                ? `Semua ${synthesizedClusters.length} kelompok sudah disintesis`
+                : 'Belum ada kelompok yang cukup padu'}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -191,27 +263,55 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
             Menelusuri kelompok gagasan di antara catatan dan fragments...
           </p>
         </div>
-      ) : clusters.length === 0 ? (
-        /* Honest Empty State — Never Force Artificial Clusters */
-        <div className="p-8 sm:p-10 rounded-2xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A]/60 border border-dashed border-[#D6CEBE] dark:border-[#332F2C] text-center space-y-2.5">
-          <div className="w-10 h-10 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mx-auto">
-            <Compass size={18} />
+      ) : displayedClusters.length === 0 ? (
+        synthesizedClusters.length > 0 && !showSynthesizedClusters ? (
+          <div className="p-8 sm:p-10 rounded-2xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A]/60 border border-dashed border-[#D6CEBE] dark:border-[#332F2C] text-center space-y-3">
+            <div className="w-10 h-10 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mx-auto">
+              <CheckCircle2 size={18} />
+            </div>
+            <h3 className="font-serif text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+              Semua Kelompok Tema yang Terdeteksi Sudah Disintesis
+            </h3>
+            <p className="text-xs text-[#6B635B] dark:text-[#A8A196] max-w-md mx-auto leading-relaxed">
+              {synthesizedClusters.length} kelompok tema yang ditemukan saat ini seluruh isinya sudah tergabung ke dalam dokumen Synthesis. Jika nanti ada catatan atau fragments baru yang masuk ke topik ini, kelompoknya akan muncul kembali di sini.
+            </p>
+            <button
+              type="button"
+              onClick={() => setShowSynthesizedClusters(true)}
+              className="px-3.5 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#272422] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] hover:border-[#9A3412] dark:hover:border-[#EA580C] transition-colors inline-flex items-center gap-1.5"
+            >
+              <Eye size={13} />
+              <span>Lihat Kelompok yang Sudah Disintesis ({synthesizedClusters.length})</span>
+            </button>
           </div>
-          <h3 className="font-serif text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-            Belum Ada Kelompok Tema yang Cukup Alami
-          </h3>
-          <p className="text-xs text-[#6B635B] dark:text-[#A8A196] max-w-md mx-auto leading-relaxed">
-            Noesis tidak memaksakan pengelompokan jika catatan-catatanmu belum benar-benar berdekatan. Coba ubah kedekatan tema ke <strong>Longgar</strong> atau tambahkan lebih banyak catatan & fragments terkait.
-          </p>
-        </div>
+        ) : (
+          /* Honest Empty State — Never Force Artificial Clusters */
+          <div className="p-8 sm:p-10 rounded-2xl bg-[#F5EFEB]/70 dark:bg-[#1E1C1A]/60 border border-dashed border-[#D6CEBE] dark:border-[#332F2C] text-center space-y-2.5">
+            <div className="w-10 h-10 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center mx-auto">
+              <Compass size={18} />
+            </div>
+            <h3 className="font-serif text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+              Belum Ada Kelompok Tema yang Cukup Alami
+            </h3>
+            <p className="text-xs text-[#6B635B] dark:text-[#A8A196] max-w-md mx-auto leading-relaxed">
+              Noesis tidak memaksakan pengelompokan jika catatan-catatanmu belum benar-benar berdekatan. Coba ubah kedekatan tema ke <strong>Longgar</strong> atau tambahkan lebih banyak catatan & fragments terkait.
+            </p>
+          </div>
+        )
       ) : (
         <div className="space-y-4">
-          {clusters.map((cluster) => {
+          {displayedClusters.map((cluster) => {
             const isExpanded = Boolean(expandedClusterIds[cluster.id]);
             const summary = clusterSummaries[cluster.id];
             const isAnalyzing = Boolean(analyzingClusterIds[cluster.id]);
             const errorMsg = clusterErrors[cluster.id];
             const excludedSet = excludedItemIdsByCluster[cluster.id] || new Set<string>();
+            const coverage = coverageByClusterId.get(cluster.id);
+            const isFullySynthesized = Boolean(coverage?.isFullySynthesized);
+            const matchedSynthesis = coverage?.coveredBySynthesis || null;
+            const hasNewItemsBeyondSynthesis = Boolean(
+              matchedSynthesis && !isFullySynthesized && coverage && coverage.newItemsCount > 0
+            );
 
             const noteCount = cluster.items.filter((i) => i.kind === 'note').length;
             const fragmentCount = cluster.items.filter((i) => i.kind === 'fragment').length;
@@ -225,7 +325,9 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
             return (
               <div
                 key={cluster.id}
-                className="rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs overflow-hidden transition-all"
+                className={`rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs overflow-hidden transition-all ${
+                  isFullySynthesized ? 'opacity-90' : ''
+                }`}
               >
                 {/* Collapsed / Header Summary Row */}
                 <div className="p-4 sm:p-6 space-y-3">
@@ -244,6 +346,39 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
                             ? 'Kedekatan makna'
                             : 'Kemiripan konsep & tag'}
                         </span>
+                        {isFullySynthesized && matchedSynthesis && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setActiveNoteId(matchedSynthesis.note.id);
+                              setActiveView('editor');
+                            }}
+                            title={`Buka dokumen sintesis: ${matchedSynthesis.note.title}`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#F5EFEB] dark:bg-[#272422] border border-[#D6CEBE] dark:border-[#3A3531] text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] transition-colors max-w-full"
+                          >
+                            <CheckCircle2 size={11} className="shrink-0 text-[#9A3412] dark:text-[#EA580C]" />
+                            <span className="truncate max-w-[220px]">
+                              Sudah Disintesis · “{matchedSynthesis.note.title}”
+                            </span>
+                          </button>
+                        )}
+                        {hasNewItemsBeyondSynthesis && matchedSynthesis && coverage && (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-[#9A3412]/10 dark:bg-[#EA580C]/15 border border-[#9A3412]/30 dark:border-[#EA580C]/30 text-[#9A3412] dark:text-[#EA580C] max-w-full">
+                            <Sparkles size={11} className="shrink-0" />
+                            <span className="truncate max-w-[240px]">
+                              {coverage.newItemsCount} materi baru di luar “{matchedSynthesis.note.title}”
+                            </span>
+                          </span>
+                        )}
+                        {summary && (
+                          <AiProcessBadge
+                            featureName="Rangkuman Tema Kelompok (Clusters)"
+                            modelUsed={summary.modelUsed}
+                            fallbackUsed={summary.fallbackUsed}
+                            aiTrace={summary.aiTrace}
+                            overlayKey={`ai-trace-cluster-card-${cluster.id}`}
+                          />
+                        )}
                       </div>
 
                       <h3 className="font-serif text-lg sm:text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
@@ -303,9 +438,20 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
                     {/* Optional Gemini Theme Analysis Box */}
                     <div className="p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <span className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                          Gambaran Benang Merah Kelompok
-                        </span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                            Gambaran Benang Merah Kelompok
+                          </span>
+                          {summary && (
+                            <AiProcessBadge
+                              featureName="Rangkuman Tema Kelompok (Clusters)"
+                              modelUsed={summary.modelUsed}
+                              fallbackUsed={summary.fallbackUsed}
+                              aiTrace={summary.aiTrace}
+                              overlayKey={`ai-trace-cluster-${cluster.id}`}
+                            />
+                          )}
+                        </div>
                         <button
                           type="button"
                           onClick={() => handleAnalyzeCluster(cluster)}
@@ -381,6 +527,9 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                         {cluster.items.map((item) => {
                           const isChecked = !excludedSet.has(item.id);
+                          const isInMatchedSynthesis = Boolean(
+                            matchedSynthesis?.coveredItemIds.has(item.id)
+                          );
                           return (
                             <div
                               key={item.id}
@@ -404,13 +553,26 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
 
                               <div className="min-w-0 flex-1">
                                 <div className="flex items-center justify-between gap-2">
-                                  <span className="text-[10px] font-mono uppercase font-semibold text-[#9A3412] dark:text-[#EA580C]">
-                                    {item.kind === 'fragment' ? 'Fragment' : 'Catatan'} · {item.type}
-                                  </span>
+                                  <div className="flex flex-wrap items-center gap-1.5 min-w-0">
+                                    <span className="text-[10px] font-mono uppercase font-semibold text-[#9A3412] dark:text-[#EA580C]">
+                                      {item.kind === 'fragment' ? 'Fragment' : 'Catatan'} · {item.type}
+                                    </span>
+                                    {matchedSynthesis && (
+                                      <span
+                                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded-md ${
+                                          isInMatchedSynthesis
+                                            ? 'bg-[#FAF7F2] dark:bg-[#272422] text-[#9C9388] dark:text-[#736C62] border border-[#E8E2D8] dark:border-[#2F2B28]'
+                                            : 'bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C] border border-[#9A3412]/25 dark:border-[#EA580C]/30 font-semibold'
+                                        }`}
+                                      >
+                                        {isInMatchedSynthesis ? 'Sudah di Sintesis' : 'Baru'}
+                                      </span>
+                                    )}
+                                  </div>
                                   <button
                                     type="button"
                                     onClick={() => handleOpenSourceItem(item)}
-                                    className="text-[11px] text-[#9C9388] hover:text-[#9A3412] dark:hover:text-[#EA580C] flex items-center gap-1"
+                                    className="text-[11px] text-[#9C9388] hover:text-[#9A3412] dark:hover:text-[#EA580C] flex items-center gap-1 shrink-0"
                                   >
                                     <span>Baca</span>
                                     <ExternalLink size={10} />
@@ -434,23 +596,41 @@ export const TopicClustersPanel: React.FC<TopicClustersPanelProps> = ({
                       <span className="text-xs text-[#6B635B] dark:text-[#A8A196]">
                         {selectedItems.length < 2
                           ? 'Sisakan minimal 2 catatan/fragments terpilih untuk dibawa ke Synthesis.'
+                          : isFullySynthesized && matchedSynthesis
+                          ? `Semua bahan ini sudah tergabung di “${matchedSynthesis.note.title}”.`
+                          : hasNewItemsBeyondSynthesis && matchedSynthesis && coverage
+                          ? `${coverage.newItemsCount} materi baru belum masuk ke “${matchedSynthesis.note.title}”.`
                           : `${selectedItems.length} bahan siap dieksplorasi lebih lanjut di Synthesis Workspace.`}
                       </span>
-                      <button
-                        type="button"
-                        disabled={selectedItems.length < 2}
-                        onClick={() =>
-                          onSendToSynthesis(
-                            selectedItems,
-                            summary?.themeTitle || cluster.anchorTitle
-                          )
-                        }
-                        className="px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5 shadow-xs"
-                      >
-                        <Sparkles size={13} />
-                        <span>Bawa Bahan ke Synthesis</span>
-                        <ArrowRight size={12} />
-                      </button>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {matchedSynthesis && (
+                          <button
+                            type="button"
+                            onClick={() => startUpdateSynthesis(matchedSynthesis.note.id)}
+                            className="px-3.5 py-2.5 rounded-xl border border-[#9A3412]/40 dark:border-[#EA580C]/40 bg-[#FAF7F2] dark:bg-[#272422] text-xs font-medium text-[#9A3412] dark:text-[#EA580C] hover:bg-[#9A3412]/10 dark:hover:bg-[#EA580C]/15 transition-colors flex items-center justify-center gap-1.5"
+                          >
+                            <RefreshCw size={12} />
+                            <span>Perbarui Sintesis Ini</span>
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          disabled={selectedItems.length < 2}
+                          onClick={() =>
+                            onSendToSynthesis(
+                              selectedItems,
+                              summary?.themeTitle || cluster.anchorTitle
+                            )
+                          }
+                          className="px-4 py-2.5 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-50 transition-colors flex items-center justify-center gap-1.5 shadow-xs"
+                        >
+                          <Sparkles size={13} />
+                          <span>
+                            {isFullySynthesized ? 'Buat Sintesis Baru' : 'Bawa Bahan ke Synthesis'}
+                          </span>
+                          <ArrowRight size={12} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}

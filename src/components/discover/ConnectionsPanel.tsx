@@ -26,6 +26,7 @@ import {
   Layers,
   AlertCircle,
 } from 'lucide-react';
+import { AiProcessBadge } from './AiProcessBadge';
 
 interface ConnectionsPanelProps {
   vectorMap: VectorMapResult | null;
@@ -393,9 +394,18 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
                   {analysis && (
                     <div className="p-4 rounded-xl bg-[#F5EFEB] dark:bg-[#221F1D] border border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
                       <div>
-                        <span className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] font-semibold">
-                          Kesamaan Inti
-                        </span>
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] font-semibold">
+                            Kesamaan Inti
+                          </span>
+                          <AiProcessBadge
+                            featureName="Analisis Keterkaitan (Connections)"
+                            modelUsed={analysis.modelUsed}
+                            fallbackUsed={analysis.fallbackUsed}
+                            aiTrace={analysis.aiTrace}
+                            overlayKey={`ai-trace-conn-pending-${candidate.pairKey}`}
+                          />
+                        </div>
                         <p className="text-xs sm:text-sm text-[#221F1D] dark:text-[#EDE8E1] mt-0.5 leading-relaxed">
                           {analysis.similaritySummary}
                         </p>
@@ -484,7 +494,7 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
                 className="p-4 sm:p-5 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-3"
               >
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     <span className="inline-flex items-center gap-1 text-[11px] font-medium px-2.5 py-0.5 rounded-lg bg-emerald-500/10 text-emerald-700 dark:text-emerald-300 border border-emerald-500/20">
                       <Check size={11} />
                       <span>Terhubung</span>
@@ -495,6 +505,15 @@ export const ConnectionsPanel: React.FC<ConnectionsPanelProps> = ({
                       >
                         {relStyle.label}
                       </span>
+                    )}
+                    {analysis && (
+                      <AiProcessBadge
+                        featureName="Analisis Keterkaitan (Connections)"
+                        modelUsed={analysis.modelUsed}
+                        fallbackUsed={analysis.fallbackUsed}
+                        aiTrace={analysis.aiTrace}
+                        overlayKey={`ai-trace-conn-approved-${pair.pairKey}`}
+                      />
                     )}
                   </div>
 

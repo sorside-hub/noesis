@@ -21,6 +21,8 @@ export const DiscoverPage: React.FC = () => {
     synthesisTargetNoteId,
     discoverTab: activeTab,
     setDiscoverTab: setActiveTab,
+    pendingSynthesisSeed,
+    clearPendingSynthesisSeed,
   } = useNoesis();
 
   const scrollRef = useScrollRestoration<HTMLDivElement>('discover:' + activeTab);
@@ -54,8 +56,15 @@ export const DiscoverPage: React.FC = () => {
     );
   }, [clusterSummaries]);
 
-  // Seed payload when sending items from Connections or Topic Clusters into Synthesis
+  // Seed payload when sending items from Connections, Clusters, or Projects into Synthesis
   const [synthesisSeed, setSynthesisSeed] = useState<SynthesisSeedPayload | null>(null);
+
+  useEffect(() => {
+    if (!pendingSynthesisSeed) return;
+    setSynthesisSeed(pendingSynthesisSeed);
+    setActiveTab('synthesis');
+    clearPendingSynthesisSeed();
+  }, [pendingSynthesisSeed, setActiveTab, clearPendingSynthesisSeed]);
 
   const loadVectors = useCallback(async () => {
     setIsLoadingVectors(true);

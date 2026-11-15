@@ -5,7 +5,10 @@ interface DeleteConfirmModalProps {
   isOpen: boolean;
   onClose: () => void;
   onConfirm: () => void;
-  itemType?: 'note' | 'fragment';
+  itemType?: 'note' | 'fragment' | 'project';
+  title?: string;
+  message?: string;
+  confirmText?: string;
 }
 
 export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
@@ -13,8 +16,18 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
   onClose,
   onConfirm,
   itemType = 'note',
+  title,
+  message,
+  confirmText = 'Hapus',
 }) => {
   if (!isOpen) return null;
+
+  const defaultTitle =
+    itemType === 'fragment'
+      ? 'Hapus fragment?'
+      : itemType === 'project'
+      ? 'Hapus project?'
+      : 'Hapus note?';
 
   return (
     <div
@@ -31,10 +44,10 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
           </div>
           <div>
             <h3 className="font-serif text-base font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-              Hapus {itemType === 'fragment' ? 'fragment' : 'note'}?
+              {title || defaultTitle}
             </h3>
             <p className="text-xs text-[#6B635B] dark:text-[#A8A196]">
-              Tindakan ini tidak bisa dibatalkan.
+              {message || 'Tindakan ini tidak bisa dibatalkan.'}
             </p>
           </div>
         </div>
@@ -55,7 +68,7 @@ export const DeleteConfirmModal: React.FC<DeleteConfirmModalProps> = ({
             }}
             className="px-4 py-1.5 rounded-xl bg-red-600 hover:bg-red-700 text-white text-xs font-medium shadow-xs transition-colors"
           >
-            Hapus
+            {confirmText}
           </button>
         </div>
       </div>

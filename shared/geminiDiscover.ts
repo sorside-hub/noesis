@@ -50,46 +50,180 @@ const isFatalAuthError = (err: any): boolean => {
   );
 };
 
+export interface GeminiProcessStep {
+  step: number;
+  label: string;
+  model?: string;
+  role?: 'primary' | 'fallback' | 'wait';
+  status: 'success' | 'failed' | 'waiting';
+  detail?: string;
+  durationMs?: number;
+}
+
+export interface GeminiExecutionTrace {
+  primaryModel: string;
+  fallbackModel: string;
+  modelUsed: string;
+  fallbackUsed: boolean;
+  retriedPrimary: boolean;
+  totalDurationMs: number;
+  steps: GeminiProcessStep[];
+}
+
+const formatSafeGeminiErrorDetail = (err: any): string => {
+  const status = err?.status || err?.statusCode;
+  const rawMsg = String(err?.message || '').replace(/\s+/g, ' ').trim();
+  const cleanMsg = rawMsg.length > 140 ? `${rawMsg.slice(0, 137)}...` : rawMsg;
+  if (status && cleanMsg) {
+    return `HTTP ${status}: ${cleanMsg}`;
+  }
+  if (status) {
+    return `HTTP ${status}`;
+  }
+  return cleanMsg || 'Permintaan gagal tanpa detail error.';
+};
+
 /**
  * Resilient Gemini caller:
  * 1. Try PRIMARY_MODEL ('gemini-4-hydrogen')
  * 2. If attempt 1 fails (non-auth error), wait RETRY_DELAY_MS (2.5s) then retry PRIMARY_MODEL
- * 3. Only if retry also fails, fall back to FALLBACK_MODEL ('gemini-3.1-flash-lite')
+ * 3. Only if retry also fails, fall back to FALLBACK_MODEL ('gemini-3.5-flash-lite')
  */
 export async function callGeminiWithDelayedRetry<T>(
   apiKey: string | undefined,
   executor: (ai: GoogleGenAI, model: string, isFallback: boolean) => Promise<T>
-): Promise<{ data: T; modelUsed: string; fallbackUsed: boolean }> {
+): Promise<{ data: T; modelUsed: string; fallbackUsed: boolean; aiTrace: GeminiExecutionTrace }> {
   const ai = getGeminiClient(apiKey);
+  const overallStart = Date.now();
+  const steps: GeminiProcessStep[] = [];
 
+  const attempt1Start = Date.now();
   try {
     const data = await executor(ai, PRIMARY_MODEL, false);
-    return { data, modelUsed: PRIMARY_MODEL, fallbackUsed: false };
+    steps.push({
+      step: 1,
+      label: 'Percobaan 1 — Model Utama',
+      model: PRIMARY_MODEL,
+      role: 'primary',
+      status: 'success',
+      detail: 'Berhasil menghasilkan respons pada percobaan pertama.',
+      durationMs: Date.now() - attempt1Start,
+    });
+    return {
+      data,
+      modelUsed: PRIMARY_MODEL,
+      fallbackUsed: false,
+      aiTrace: {
+        primaryModel: PRIMARY_MODEL,
+        fallbackModel: FALLBACK_MODEL,
+        modelUsed: PRIMARY_MODEL,
+        fallbackUsed: false,
+        retriedPrimary: false,
+        totalDurationMs: Date.now() - overallStart,
+        steps,
+      },
+    };
   } catch (firstErr: any) {
     if (isFatalAuthError(firstErr)) {
       throw firstErr;
     }
 
+    steps.push({
+      step: 1,
+      label: 'Percobaan 1 — Model Utama',
+      model: PRIMARY_MODEL,
+      role: 'primary',
+      status: 'failed',
+      detail: formatSafeGeminiErrorDetail(firstErr),
+      durationMs: Date.now() - attempt1Start,
+    });
+
     console.warn(
       `[Gemini] ${PRIMARY_MODEL} gagal pada percobaan pertama (${firstErr?.message || 'unknown error'}). Menunggu ${RETRY_DELAY_MS}ms sebelum mencoba lagi...`
     );
 
+    steps.push({
+      step: 2,
+      label: 'Jeda Sebelum Mencoba Ulang',
+      role: 'wait',
+      status: 'waiting',
+      detail: `Menunggu ${(RETRY_DELAY_MS / 1000).toFixed(1).replace('.0', '')} detik sebelum retry model utama.`,
+      durationMs: RETRY_DELAY_MS,
+    });
+
     await sleep(RETRY_DELAY_MS);
 
+    const attempt2Start = Date.now();
     try {
       const data = await executor(ai, PRIMARY_MODEL, false);
-      return { data, modelUsed: PRIMARY_MODEL, fallbackUsed: false };
+      steps.push({
+        step: 3,
+        label: 'Percobaan 2 — Model Utama (Retry)',
+        model: PRIMARY_MODEL,
+        role: 'primary',
+        status: 'success',
+        detail: 'Berhasil setelah percobaan ulang.',
+        durationMs: Date.now() - attempt2Start,
+      });
+      return {
+        data,
+        modelUsed: PRIMARY_MODEL,
+        fallbackUsed: false,
+        aiTrace: {
+          primaryModel: PRIMARY_MODEL,
+          fallbackModel: FALLBACK_MODEL,
+          modelUsed: PRIMARY_MODEL,
+          fallbackUsed: false,
+          retriedPrimary: true,
+          totalDurationMs: Date.now() - overallStart,
+          steps,
+        },
+      };
     } catch (retryErr: any) {
       if (isFatalAuthError(retryErr)) {
         throw retryErr;
       }
 
+      steps.push({
+        step: 3,
+        label: 'Percobaan 2 — Model Utama (Retry)',
+        model: PRIMARY_MODEL,
+        role: 'primary',
+        status: 'failed',
+        detail: formatSafeGeminiErrorDetail(retryErr),
+        durationMs: Date.now() - attempt2Start,
+      });
+
       console.warn(
         `[Gemini] ${PRIMARY_MODEL} tetap gagal setelah percobaan ulang (${retryErr?.message || 'unknown error'}). Beralih ke fallback ${FALLBACK_MODEL}...`
       );
 
+      const fallbackStart = Date.now();
       const data = await executor(ai, FALLBACK_MODEL, true);
-      return { data, modelUsed: FALLBACK_MODEL, fallbackUsed: true };
+      steps.push({
+        step: 4,
+        label: 'Fallback — Model Cadangan',
+        model: FALLBACK_MODEL,
+        role: 'fallback',
+        status: 'success',
+        detail: 'Model utama tetap gagal, berhasil diselesaikan oleh model fallback.',
+        durationMs: Date.now() - fallbackStart,
+      });
+
+      return {
+        data,
+        modelUsed: FALLBACK_MODEL,
+        fallbackUsed: true,
+        aiTrace: {
+          primaryModel: PRIMARY_MODEL,
+          fallbackModel: FALLBACK_MODEL,
+          modelUsed: FALLBACK_MODEL,
+          fallbackUsed: true,
+          retriedPrimary: true,
+          totalDurationMs: Date.now() - overallStart,
+          steps,
+        },
+      };
     }
   }
 }
@@ -213,7 +347,7 @@ ${epistemicDisciplineRules}
 SUMBER PENGETAHUAN (${items.length} item):
 ${formattedSources}`;
 
-  const { data: result, modelUsed, fallbackUsed } = await callGeminiWithDelayedRetry(
+  const { data: result, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
     apiKey,
     async (ai, model, isFallback) => {
       const response = await ai.models.generateContent({
@@ -267,7 +401,7 @@ ${formattedSources}`;
     }
   );
 
-  return { success: true, modelUsed, fallbackUsed, result };
+  return { success: true, modelUsed, fallbackUsed, aiTrace, result };
 }
 
 export async function analyzeConnectionWithGemini(
@@ -305,7 +439,7 @@ Tugas & Aturan Kejujuran Epistemik:
 4. Jelaskan hubungan yang terbentuk beserta batasan konteksnya bila ada.
 5. Untuk potensi penggabungan, tuliskan sebagai 1 pertanyaan eksplorasi atau sudut pandang perbandingan yang proporsional (bukan tesis universal yang mengada-ada).`;
 
-  const { data: result, modelUsed, fallbackUsed } = await callGeminiWithDelayedRetry(
+  const { data: result, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
     apiKey,
     async (ai, model, isFallback) => {
       const response = await ai.models.generateContent({
@@ -355,7 +489,7 @@ Tugas & Aturan Kejujuran Epistemik:
     }
   );
 
-  return { success: true, modelUsed, fallbackUsed, result };
+  return { success: true, modelUsed, fallbackUsed, aiTrace, result };
 }
 
 export async function summarizeClusterWithGemini(
@@ -385,7 +519,7 @@ Tugas & Aturan Kejujuran:
 2. Berikan deskripsi benang merahnya (1-2 kalimat jujur). Jika ada satu atau beberapa catatan yang sebenarnya agak melenceng/berbeda ranah dari mayoritas kelompok, SEBUTKAN secara eksplisit agar pengguna bisa mempertimbangkan untuk tidak menyertakannya ke Synthesis.
 3. Berikan 2-3 sudut pandang nyata yang muncul di dalamnya tanpa memperluas skala klaim melebihi teks asli.`;
 
-  const { data: result, modelUsed, fallbackUsed } = await callGeminiWithDelayedRetry(
+  const { data: result, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
     apiKey,
     async (ai, model, isFallback) => {
       const response = await ai.models.generateContent({
@@ -430,5 +564,5 @@ Tugas & Aturan Kejujuran:
     }
   );
 
-  return { success: true, modelUsed, fallbackUsed, result };
+  return { success: true, modelUsed, fallbackUsed, aiTrace, result };
 }
