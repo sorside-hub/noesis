@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS public.notes (
   created_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   updated_at TIMESTAMPTZ DEFAULT timezone('utc'::text, now()) NOT NULL,
   embedding vector(1024),
-  embedded_at TIMESTAMPTZ
+  embedded_at TIMESTAMPTZ,
+  exclude_from_embed BOOLEAN DEFAULT false
 );
 
 -- 3. TABEL FRAGMENTS
@@ -86,6 +87,7 @@ CREATE TABLE IF NOT EXISTS public.projects (
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid();
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedding vector(1024);
 ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS embedded_at TIMESTAMPTZ;
+ALTER TABLE public.notes ADD COLUMN IF NOT EXISTS exclude_from_embed BOOLEAN DEFAULT false;
 ALTER TABLE public.notes DROP COLUMN IF EXISTS word_count;
 
 -- Perbarui CHECK constraint pada notes.type agar mendukung dokumen 'synthesis'

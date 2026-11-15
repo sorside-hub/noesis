@@ -269,6 +269,7 @@ interface NoesisContextType {
   }>;
   manualEmbedNote: (noteId: string) => Promise<boolean>;
   manualRemoveEmbedNote: (noteId: string) => Promise<boolean>;
+  toggleExcludeNoteFromEmbed: (noteId: string) => Promise<void>;
   manualEmbedFragment: (fragmentId: string) => Promise<boolean>;
   manualRemoveEmbedFragment: (fragmentId: string) => Promise<boolean>;
 
@@ -728,6 +729,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
   const syncNoteWithFallback = async (note: Note): Promise<boolean> => {
     if (!canRemoteSync() || !isBrowserOnline()) return false;
+    if (note.excludeFromEmbed) {
+      return await upsertNoteToSupabase({ ...note, embeddedAt: undefined }, null);
+    }
     const embeddedOk = await embedAndSyncNote(note);
     if (embeddedOk) return true;
     return await upsertNoteToSupabase(note);
@@ -814,8 +818,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return;
     }
 
-    const shouldAutoEmbed = triggerAutoEmbed && dirtyEmbedNoteIdsRef.current.has(noteId);
-    if (shouldAutoEmbed) {
+    const shouldAutoEmbed =
+      !latestNote.excludeFromEmbed &&
+      triggerAutoEmbed &&
+      dirtyEmbedNoteIdsRef.current.has(noteId);
+    if (shouldAutoEmbed || latestNote.excludeFromEmbed) {
       dirtyEmbedNoteIdsRef.current.delete(noteId);
     }
 
@@ -1388,7 +1395,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       let pushedFragments = 0;
 
       for (const note of offlineNotesSnapshot) {
-        const synced = isCloudflareAiConfigured()
+        const synced = note.excludeFromEmbed
+          ? await upsertNoteToSupabase({ ...note, embeddedAt: undefined }, null)
+          : isCloudflareAiConfigured()
           ? (await embedAndSyncNote(note)) || (await upsertNoteToSupabase(note))
           : await upsertNoteToSupabase(note);
         if (synced) pushedNotes++;
@@ -1959,9 +1968,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       id: `note-${Date.now()}`,
       title: '',
       content: '<p></p>',
-      excerpt: 'Begin writing your reflections...',
+      excerpt: '',
       type: type || 'thought',
-      tags: ['reflection'],
+      tags: [],
       favorite: false,
       archived: false,
       relatedNoteIds: [],
@@ -2016,7 +2025,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       'source' in updates ||
       'type' in updates;
     if (isContentEdit) {
-      dirtyEmbedNoteIdsRef.current.add(id);
+      if (updatedObj.excludeFromEmbed) {
+        dirtyEmbedNoteIdsRef.current.delete(id);
+      } else {
+        dirtyEmbedNoteIdsRef.current.add(id);
+      }
     }
 
     if (canRemoteSync() && authUserRef.current) {
@@ -3604,7 +3617,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     let projectsCount = 0;
 
     for (const note of notes) {
-      const ok = await embedAndSyncNote(note);
+      const ok = note.excludeFromEmbed
+        ? await upsertNoteToSupabase({ ...note, embeddedAt: undefined }, null)
+        : await embedAndSyncNote(note);
       if (ok) notesCount++;
     }
 
@@ -3639,7 +3654,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       delete embedTimersRef.current[noteId];
     }
     const target = notesRef.current.find((n) => n.id === noteId);
-    if (!target) return false;
+    if (!target || target.excludeFromEmbed) return false;
     dirtyEmbedNoteIdsRef.current.delete(noteId);
     const snapshotUpdatedAt = target.updatedAt;
     const ok = await embedAndSyncNote(target);
@@ -3683,6 +3698,49 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return ok;
     }
     return true;
+  };
+
+  // Toggle permanent auto-embed & Discover exclusion on a Note
+  const toggleExcludeNoteFromEmbed = async (noteId: string): Promise<void> => {
+    if (embedTimersRef.current[noteId]) {
+      clearTimeout(embedTimersRef.current[noteId]);
+      delete embedTimersRef.current[noteId];
+    }
+    const target = notesRef.current.find((n) => n.id === noteId);
+    if (!target) return;
+
+    const nextExcluded = !Boolean(target.excludeFromEmbed);
+    const updatedAt = new Date().toISOString();
+    const updatedNote: Note = {
+      ...target,
+      excludeFromEmbed: nextExcluded,
+      embeddedAt: nextExcluded ? undefined : target.embeddedAt,
+      updatedAt,
+    };
+
+    if (nextExcluded) {
+      dirtyEmbedNoteIdsRef.current.delete(noteId);
+    } else {
+      dirtyEmbedNoteIdsRef.current.add(noteId);
+    }
+
+    notesRef.current = notesRef.current.map((n) => (n.id === noteId ? updatedNote : n));
+    setNotes((prev) => prev.map((n) => (n.id === noteId ? updatedNote : n)));
+
+    const uid = authUserRef.current?.id;
+    if (canRemoteSync() && uid) {
+      enqueueUpsertNote(uid, noteId, updatedAt, false);
+      if (isBrowserOnline()) {
+        const ok = await upsertNoteToSupabase(updatedNote, nextExcluded ? null : undefined);
+        if (ok && authUserRef.current?.id === uid) {
+          dequeueUpsertNote(uid, noteId, updatedAt);
+        }
+      } else {
+        setSyncStatus('offline');
+      }
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
   };
 
   // Manual embed single fragment
@@ -4230,6 +4288,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       idx: targetIdx,
       view: 'editor',
       noteId: newId,
+      projectId: null,
       fragmentDrawerOpen: false,
       fragmentId: null,
       overlayId: null,
@@ -4275,7 +4334,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
           ]);
 
           const merged: DiscoverSourceItem[] = [];
-          const activeNoteIds = new Set(notes.filter((n) => !n.archived).map((n) => n.id));
+          const activeNoteIds = new Set(
+            notes.filter((n) => !n.archived && !n.excludeFromEmbed).map((n) => n.id)
+          );
 
           if (noteResults) {
             for (const r of noteResults) {
@@ -4304,7 +4365,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     // Local keyword/tag fallback (for offline or unembedded notes/fragments)
     const terms = trimmed.toLowerCase().split(/\s+/).filter((t) => t.length >= 2);
     const localItems: DiscoverSourceItem[] = [
-      ...notes.filter((n) => !n.archived).map((n) => noteToDiscoverItem(n)),
+      ...notes.filter((n) => !n.archived && !n.excludeFromEmbed).map((n) => noteToDiscoverItem(n)),
       ...fragments.map((f) => fragmentToDiscoverItem(f)),
     ];
 
@@ -4692,6 +4753,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         projects,
         activeProjectId,
         setActiveProjectId,
+        openProject,
+        closeProject,
+        exitDeletedProject,
         projectsTableMissing,
         createProject,
         updateProject,
@@ -4732,6 +4796,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         syncAllToSupabase,
         manualEmbedNote,
         manualRemoveEmbedNote,
+        toggleExcludeNoteFromEmbed,
         manualEmbedFragment,
         manualRemoveEmbedFragment,
         isSemanticSearch,

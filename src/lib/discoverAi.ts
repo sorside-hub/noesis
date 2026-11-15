@@ -107,7 +107,10 @@ const buildUnifiedEntries = (
   options?: { excludeSynthesisNotes?: boolean }
 ): InternalUnifiedEntry[] => {
   const activeNotes = notes.filter(
-    (n) => !n.archived && !(options?.excludeSynthesisNotes && n.type === 'synthesis')
+    (n) =>
+      !n.archived &&
+      !n.excludeFromEmbed &&
+      !(options?.excludeSynthesisNotes && n.type === 'synthesis')
   );
   const entries: InternalUnifiedEntry[] = [];
 
@@ -441,8 +444,9 @@ export const computeRelatedNoteSuggestions = (
   const targetVec = vectorMap?.noteVectors.get(targetNote.id);
   const scored: { note: Note; score: number; reason: 'vector' | 'tag-concept' }[] = [];
 
+  if (targetNote.excludeFromEmbed) return [];
   for (const candidate of candidateNotes) {
-    if (candidate.archived || candidate.id === targetNote.id) continue;
+    if (candidate.archived || candidate.excludeFromEmbed || candidate.id === targetNote.id) continue;
     const candidateVec = vectorMap?.noteVectors.get(candidate.id);
 
     if (targetVec && candidateVec) {

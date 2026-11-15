@@ -211,6 +211,7 @@ export const toDbNote = (note: Note, embedding?: number[] | null) => {
     created_at: note.createdAt || new Date().toISOString(),
     updated_at: note.updatedAt || new Date().toISOString(),
     embedded_at: note.embeddedAt || null,
+    exclude_from_embed: Boolean(note.excludeFromEmbed),
   };
 
   if (embedding !== undefined) {
@@ -240,6 +241,7 @@ export const fromDbNote = (row: any): Note => {
     createdAt: row.created_at || new Date().toISOString(),
     updatedAt: row.updated_at || new Date().toISOString(),
     embeddedAt: row.embedded_at || undefined,
+    excludeFromEmbed: Boolean(row.exclude_from_embed),
   };
 };
 
@@ -319,6 +321,13 @@ export const upsertNoteToSupabase = async (
     if (userId) dbRow.user_id = userId;
     const { error } = await client.from('notes').upsert(dbRow, { onConflict: 'id' });
     if (error) {
+      if (error.message?.toLowerCase().includes('exclude_from_embed')) {
+        const { exclude_from_embed: _ignored, ...legacyRow } = dbRow;
+        const retry = await client.from('notes').upsert(legacyRow, { onConflict: 'id' });
+        if (!retry.error) return true;
+        console.warn('Supabase upsertNote fallback error:', retry.error.message);
+        return false;
+      }
       console.warn('Supabase upsertNote error:', error.message);
       return false;
     }

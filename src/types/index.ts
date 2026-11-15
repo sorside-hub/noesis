@@ -32,6 +32,7 @@ export interface Note {
   createdAt: string;
   updatedAt: string;
   embeddedAt?: string;
+  excludeFromEmbed?: boolean;
 }
 
 export interface Fragment {

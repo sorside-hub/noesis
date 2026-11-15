@@ -75,6 +75,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     createNote,
     manualEmbedNote,
     manualRemoveEmbedNote,
+    toggleExcludeNoteFromEmbed,
     isCloudflareConnected,
     isSupabaseConnected,
   } = useNoesis();
@@ -279,6 +280,21 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setTimeout(() => setEmbedNotice(null), 3000);
   };
 
+  const handleToggleExcludeEmbed = async () => {
+    if (!activeNote || isEmbeddingLoading) return;
+    const willExclude = !Boolean(activeNote.excludeFromEmbed);
+    setIsEmbeddingLoading(true);
+    setEmbedNotice(null);
+    await toggleExcludeNoteFromEmbed(activeNote.id);
+    setIsEmbeddingLoading(false);
+    setEmbedNotice(
+      willExclude
+        ? 'Dikecualikan dari auto-embed & Discover'
+        : 'Auto-embed diaktifkan kembali'
+    );
+    setTimeout(() => setEmbedNotice(null), 3500);
+  };
+
   const handleSetLink = useCallback(() => {
     if (!editor) return;
     if (linkUrl) {
@@ -466,8 +482,35 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
 
           {/* Right: Embedding Status Dot, Favorite, Document Actions Menu, and Drawer Toggle */}
           <div className="flex items-center gap-1.5 shrink-0" onClick={(e) => e.stopPropagation()}>
-            {/* Embedding Status Indicator Dot (Left of Favorite Star) */}
+            {/* Embedding Status Indicator (Dot or X when excluded) */}
             {(() => {
+              if (activeNote.excludeFromEmbed) {
+                return (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setInspectorTab('metadata');
+                      if (typeof window !== 'undefined' && window.innerWidth >= 768) {
+                        setShowInspector(true);
+                      } else {
+                        setShowMobileInspector(true);
+                      }
+                    }}
+                    title="Auto-embed dikecualikan — Klik untuk atur di Metadata"
+                    className="flex items-center gap-1.5 px-2 py-1.5 rounded-lg hover:bg-[#ECE4DC] dark:hover:bg-[#272422] transition-colors text-[#9C9388] dark:text-[#736C62] group cursor-pointer"
+                  >
+                    <X
+                      size={13}
+                      strokeWidth={2.5}
+                      className={isEmbeddingLoading ? 'animate-spin' : ''}
+                    />
+                    <span className="hidden sm:inline text-[11px] font-mono text-[#9C9388] dark:text-[#736C62] group-hover:text-[#221F1D] dark:group-hover:text-[#EDE8E1] transition-colors">
+                      Excluded
+                    </span>
+                  </button>
+                );
+              }
+
               const getEmbedStatus = () => {
                 if (!activeNote.embeddedAt) {
                   return {
@@ -1052,7 +1095,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 </div>
 
                 {/* 4. Semantic Embedding (bge-m3) */}
-                <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+                <div className="pt-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
                   <div className="flex items-center justify-between">
                     <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
                       <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
@@ -1065,6 +1108,14 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                   <div className="flex items-center justify-between pt-0.5">
                     <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
                     {(() => {
+                      if (activeNote.excludeFromEmbed) {
+                        return (
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
+                            <X size={10} />
+                            <span>Excluded</span>
+                          </span>
+                        );
+                      }
                       if (!activeNote.embeddedAt) {
                         return (
                           <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
@@ -1091,29 +1142,61 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                     })()}
                   </div>
 
-                  <div className="flex items-center gap-2 pt-1">
+                  {/* Exclude from Auto-Embed & Discover Toggle */}
+                  <div className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2.5">
+                    <div className="min-w-0">
+                      <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                        Kecualikan dari Auto-Embed
+                      </p>
+                      <p className="text-[10px] text-[#9C9388] dark:text-[#736C62] leading-snug mt-0.5">
+                        Lewati indeks AI &amp; Discover (cocok untuk daftar umum).
+                      </p>
+                    </div>
                     <button
                       type="button"
-                      onClick={handleTriggerEmbed}
+                      role="switch"
+                      aria-checked={Boolean(activeNote.excludeFromEmbed)}
+                      onClick={handleToggleExcludeEmbed}
                       disabled={isEmbeddingLoading}
-                      className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                      className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                        activeNote.excludeFromEmbed
+                          ? 'bg-[#9A3412] dark:bg-[#EA580C]'
+                          : 'bg-[#D6CEBE] dark:bg-[#3A3531]'
+                      }`}
                     >
-                      <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                      <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
+                      <span
+                        className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
+                          activeNote.excludeFromEmbed ? 'translate-x-4.5' : 'translate-x-1'
+                        }`}
+                      />
                     </button>
+                  </div>
 
-                    {activeNote.embeddedAt && (
+                  {!activeNote.excludeFromEmbed && (
+                    <div className="flex items-center gap-2 pt-0.5">
                       <button
                         type="button"
-                        onClick={handleRemoveEmbed}
+                        onClick={handleTriggerEmbed}
                         disabled={isEmbeddingLoading}
-                        className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
-                        title="Hapus vector embedding"
+                        className="flex-1 py-1.5 px-2.5 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
                       >
-                        <Trash2 size={13} />
+                        <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                        <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
                       </button>
-                    )}
-                  </div>
+
+                      {activeNote.embeddedAt && (
+                        <button
+                          type="button"
+                          onClick={handleRemoveEmbed}
+                          disabled={isEmbeddingLoading}
+                          className="py-1.5 px-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                          title="Hapus vector embedding"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {embedNotice && (
                     <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">
@@ -1450,7 +1533,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                   </div>
 
                   {/* 4. Semantic Embedding (bge-m3) */}
-                  <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2">
+                  <div className="pt-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62] flex items-center gap-1">
                         <Sparkles size={12} className="text-[#9A3412] dark:text-[#EA580C]" />
@@ -1463,6 +1546,14 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                     <div className="flex items-center justify-between pt-0.5">
                       <span className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">Status Vector:</span>
                       {(() => {
+                        if (activeNote.excludeFromEmbed) {
+                          return (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
+                              <X size={10} />
+                              <span>Excluded</span>
+                            </span>
+                          );
+                        }
                         if (!activeNote.embeddedAt) {
                           return (
                             <span className="px-2 py-0.5 rounded-md text-[10px] font-mono border bg-stone-100 dark:bg-stone-800/60 text-[#9C9388] border-stone-200 dark:border-stone-700">
@@ -1489,29 +1580,61 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                       })()}
                     </div>
 
-                    <div className="flex items-center gap-2 pt-1">
+                    {/* Exclude from Auto-Embed & Discover Toggle */}
+                    <div className="p-2.5 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2.5">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                          Kecualikan dari Auto-Embed
+                        </p>
+                        <p className="text-[10px] text-[#9C9388] dark:text-[#736C62] leading-snug mt-0.5">
+                          Lewati indeks AI &amp; Discover (cocok untuk daftar umum).
+                        </p>
+                      </div>
                       <button
                         type="button"
-                        onClick={handleTriggerEmbed}
+                        role="switch"
+                        aria-checked={Boolean(activeNote.excludeFromEmbed)}
+                        onClick={handleToggleExcludeEmbed}
                         disabled={isEmbeddingLoading}
-                        className="flex-1 py-2 px-3 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
+                        className={`relative inline-flex h-5 w-9 shrink-0 items-center rounded-full transition-colors cursor-pointer ${
+                          activeNote.excludeFromEmbed
+                            ? 'bg-[#9A3412] dark:bg-[#EA580C]'
+                            : 'bg-[#D6CEBE] dark:bg-[#3A3531]'
+                        }`}
                       >
-                        <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
-                        <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
+                        <span
+                          className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform shadow-xs ${
+                            activeNote.excludeFromEmbed ? 'translate-x-4.5' : 'translate-x-1'
+                          }`}
+                        />
                       </button>
+                    </div>
 
-                      {activeNote.embeddedAt && (
+                    {!activeNote.excludeFromEmbed && (
+                      <div className="flex items-center gap-2 pt-0.5">
                         <button
                           type="button"
-                          onClick={handleRemoveEmbed}
+                          onClick={handleTriggerEmbed}
                           disabled={isEmbeddingLoading}
-                          className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
-                          title="Hapus vector embedding"
+                          className="flex-1 py-2 px-3 rounded-xl bg-[#FAF7F2] dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#9A3412] text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] transition-colors flex items-center justify-center gap-1.5 shadow-2xs"
                         >
-                          <Trash2 size={14} />
+                          <Sparkles size={13} className="text-[#9A3412] dark:text-[#EA580C]" />
+                          <span>{isEmbeddingLoading ? 'Embedding...' : activeNote.embeddedAt ? 'Re-sync Embed' : 'Embed Note'}</span>
                         </button>
-                      )}
-                    </div>
+
+                        {activeNote.embeddedAt && (
+                          <button
+                            type="button"
+                            onClick={handleRemoveEmbed}
+                            disabled={isEmbeddingLoading}
+                            className="py-2 px-3 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#221F1E] text-xs text-[#9C9388] hover:text-red-600 transition-colors"
+                            title="Hapus vector embedding"
+                          >
+                            <Trash2 size={14} />
+                          </button>
+                        )}
+                      </div>
+                    )}
 
                     {embedNotice && (
                       <p className="text-[11px] font-mono text-emerald-600 dark:text-emerald-400">

@@ -21,7 +21,16 @@ import {
   Layers,
   Loader2,
   ArrowUpRight,
+  FolderKanban,
+  Calendar,
+  Plus,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
+import {
+  countProjectTotalWords,
+  getSortedProjectSections,
+} from '../lib/projectMaster';
 
 type SparkEntry =
   | { kind: 'note'; item: Note }
@@ -85,15 +94,46 @@ const getTypeBadgeClass = (type: NoteType | FragmentType) => {
   }
 };
 
+const decodeBasicEntities = (text: string): string =>
+  text
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#39;/gi, "'");
+
+const extractReadableParagraphs = (raw: string): string[] => {
+  if (!raw) return [];
+  const withBreaks = raw
+    .replace(/<\s*br\s*\/?\s*>/gi, '\n')
+    .replace(/<\s*\/(p|h1|h2|h3|h4|h5|h6|li|blockquote|div)\s*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '');
+  return decodeBasicEntities(withBreaks)
+    .split(/\n{2,}/)
+    .map((p) => p.replace(/\s+/g, ' ').trim())
+    .filter(Boolean);
+};
+
+const getReadablePreviewText = (raw: string, fallback = '', maxChars = 320): string => {
+  const paras = extractReadableParagraphs(raw);
+  const joined = paras.length > 0 ? paras.join(' ') : fallback.trim();
+  if (!joined) return '';
+  if (joined.length <= maxChars) return joined;
+  return `${joined.slice(0, maxChars).trimEnd()}…`;
+};
+
 export const HomePage: React.FC = () => {
   const scrollRef = useScrollRestoration<HTMLDivElement>('home');
   const {
     notes,
     fragments,
+    projects,
     approvedConnections,
     connectionAnalyses,
     setActiveView,
     setActiveNoteId,
+    openProject,
     openFragmentDrawer,
     promoteFragmentToNote,
     startUpdateSynthesis,
@@ -101,13 +141,16 @@ export const HomePage: React.FC = () => {
 
   const [promotingFragmentId, setPromotingFragmentId] = useState<string | null>(null);
   const [promoteError, setPromoteError] = useState<string | null>(null);
+  const [isSparkExpanded, setIsSparkExpanded] = useState(false);
 
   const activeNotes = useMemo(() => notes.filter((n) => !n.archived), [notes]);
 
-  // Pool murni acak dari seluruh Note aktif & Fragment milik user
+  // Pool bacaan acak: utamakan catatan pengetahuan (non-excluded) & fragments
   const sparkPool = useMemo<SparkEntry[]>(() => {
+    const eligibleNotes = activeNotes.filter((n) => !n.excludeFromEmbed);
+    const noteSource = eligibleNotes.length > 0 ? eligibleNotes : activeNotes;
     return [
-      ...activeNotes.map((item) => ({ kind: 'note' as const, item })),
+      ...noteSource.map((item) => ({ kind: 'note' as const, item })),
       ...fragments.map((item) => ({ kind: 'fragment' as const, item })),
     ];
   }, [activeNotes, fragments]);
@@ -126,6 +169,7 @@ export const HomePage: React.FC = () => {
           : sparkPool;
       const chosen = candidates[Math.floor(Math.random() * candidates.length)];
       setSparkRef({ kind: chosen.kind, id: chosen.item.id });
+      setIsSparkExpanded(false);
     },
     [sparkPool]
   );
@@ -150,6 +194,38 @@ export const HomePage: React.FC = () => {
     );
   }, [sparkPool, sparkRef]);
 
+  const sparkReadingData = useMemo(() => {
+    if (!activeSpark) return { paragraphs: [] as string[], isLong: false };
+    const raw =
+      activeSpark.kind === 'note'
+        ? activeSpark.item.content || activeSpark.item.excerpt || ''
+        : activeSpark.item.content || '';
+    const paragraphs = extractReadableParagraphs(raw);
+    const totalLength = paragraphs.reduce((acc, p) => acc + p.length, 0);
+    const isLong = paragraphs.length > 3 || totalLength > 520;
+    return { paragraphs, isLong };
+  }, [activeSpark]);
+
+  const visibleSparkParagraphs = useMemo(() => {
+    const { paragraphs } = sparkReadingData;
+    if (paragraphs.length === 0) return [];
+    if (isSparkExpanded) return paragraphs;
+
+    const sliced: string[] = [];
+    let charBudget = 0;
+    for (const p of paragraphs) {
+      if (sliced.length >= 3) break;
+      if (sliced.length > 0 && charBudget + p.length > 560) break;
+      if (p.length > 560 && sliced.length === 0) {
+        sliced.push(`${p.slice(0, 560).trimEnd()}…`);
+        break;
+      }
+      sliced.push(p);
+      charBudget += p.length;
+    }
+    return sliced;
+  }, [sparkReadingData, isSparkExpanded]);
+
   // 1. Living Synthesis terbaru + cek materi baru yang belum terhubung
   const latestSynthesisInfo = useMemo(() => {
     const synthesisNotes = activeNotes
@@ -171,6 +247,7 @@ export const HomePage: React.FC = () => {
       activeNotes.some(
         (n) =>
           n.id !== latest.id &&
+          !n.excludeFromEmbed &&
           !linkedSet.has(n.id) &&
           new Date(n.updatedAt).getTime() > latestTs
       ) ||
@@ -181,23 +258,35 @@ export const HomePage: React.FC = () => {
     return { note: latest, hasNewCandidates };
   }, [activeNotes, fragments, approvedConnections]);
 
-  // 2. Catatan terakhir untuk dilanjutkan (prioritaskan catatan non-synthesis, fallback semua activeNotes)
+  // 2. Catatan terakhir untuk dilanjutkan (maks 2 agar bisa tampil lega 3-4 baris)
   const recentWritingNotes = useMemo(() => {
     const regularNotes = activeNotes.filter((n) => n.type !== 'synthesis');
     const source = regularNotes.length > 0 ? regularNotes : activeNotes;
     return [...source]
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
-      .slice(0, 3);
+      .slice(0, 2);
   }, [activeNotes]);
 
-  // 3. Fragment terbaru untuk diolah
+  // 3. Fragment terbaru untuk dibaca langsung & diolah (maks 2 agar terbaca utuh)
   const recentFragments = useMemo(() => {
     return [...fragments]
       .sort((a, b) => parseFragmentTimestamp(b) - parseFragmentTimestamp(a))
-      .slice(0, 3);
+      .slice(0, 2);
   }, [fragments]);
 
-  // 4. Gabungan Favorit/Bintang + Jejak Discover (Approved Connections & Topic Clusters)
+  // 4. Proyek aktif / sedang dikerjakan (maks 2 ringkas & informatif)
+  const activeHomeProjects = useMemo(() => {
+    return [...projects]
+      .filter((p) => p.status !== 'archived' && p.status !== 'completed')
+      .sort(
+        (a, b) =>
+          (Date.parse(b.updatedAt || b.createdAt || '') || 0) -
+          (Date.parse(a.updatedAt || a.createdAt || '') || 0)
+      )
+      .slice(0, 2);
+  }, [projects]);
+
+  // 5. Jejak Discover (Approved Connections & Topic Clusters) + Favorit Pilihan
   const approvedHighlights = useMemo(() => {
     if (approvedConnections.length === 0) return [];
     const noteMap = new Map(activeNotes.map((n) => [n.id, n]));
@@ -266,7 +355,7 @@ export const HomePage: React.FC = () => {
       .sort((a, b) => parseFragmentTimestamp(b) - parseFragmentTimestamp(a))
       .map((item) => ({ kind: 'fragment', item }));
 
-    return [...favNotes, ...favFragments].slice(0, 3);
+    return [...favNotes, ...favFragments].slice(0, 2);
   }, [activeNotes, fragments]);
 
   const handleOpenEntry = (entry: SparkEntry) => {
@@ -296,21 +385,21 @@ export const HomePage: React.FC = () => {
     }
   };
 
-  const isWorkspaceEmpty = activeNotes.length === 0 && fragments.length === 0;
+  const isWorkspaceEmpty = activeNotes.length === 0 && fragments.length === 0 && projects.length === 0;
 
   return (
-    <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-3 sm:px-10 lg:px-14 py-3 sm:py-8">
-      <div className="max-w-5xl mx-auto space-y-4 sm:space-y-8">
-        {/* Clean Editorial Header (Tanpa Tombol New/Capture, Tanpa Statistik) */}
-        <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3 sm:pb-5">
+    <div ref={scrollRef} className="flex-1 overflow-y-auto bg-[#FAF7F2] dark:bg-[#151413] px-2.5 sm:px-8 lg:px-14 py-2.5 sm:py-8">
+      <div className="max-w-5xl mx-auto space-y-4 sm:space-y-7">
+        {/* Editorial Header */}
+        <div className="border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-2.5 sm:pb-4">
           <span className="text-[10px] sm:text-[11px] font-mono uppercase tracking-widest text-[#9A3412] dark:text-[#EA580C]">
             {getGreeting()} · Curatorial Desk
           </span>
-          <h1 className="font-serif text-2xl sm:text-4xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1] mt-0.5 sm:mt-1">
+          <h1 className="font-serif text-2xl sm:text-4xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1] mt-0.5">
             Home
           </h1>
           <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-0.5 sm:mt-1 max-w-xl leading-relaxed">
-            Ruang tenang untuk menengok kembali pemikiran, mengolah fragment, dan menemukan benang merah baru.
+            Ruang tenang untuk membaca kembali pemikiran, melanjutkan karya, dan menemukan benang merah baru.
           </p>
         </div>
 
@@ -330,18 +419,18 @@ export const HomePage: React.FC = () => {
         ) : (
           <>
             {/* ==============================================================
-                BLOK 1: DAILY SPARK (Murni Acak dari Note & Fragment milikmu)
+                BLOK 1: BACAAN HARI INI (Hero Reading Card — Nyaman Dibaca)
                ============================================================== */}
             {activeSpark && (
-              <div
+              <article
                 onClick={() => handleOpenEntry(activeSpark)}
-                className="p-4 sm:p-6 rounded-2xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all group"
+                className="p-3.5 sm:p-6 rounded-2xl bg-[#F5EFEB] dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all group"
               >
-                <div className="flex items-center justify-between gap-2 mb-2 sm:mb-3">
+                <div className="flex items-center justify-between gap-2 mb-2.5 sm:mb-3">
                   <div className="flex items-center gap-2 min-w-0">
                     <span className="inline-flex items-center gap-1 text-[10px] font-mono uppercase tracking-widest text-[#9C9388] dark:text-[#736C62] shrink-0">
                       <Shuffle size={11} className="text-[#9A3412] dark:text-[#EA580C]" />
-                      <span>Daily Spark</span>
+                      <span>Bacaan Hari Ini</span>
                     </span>
                     <span className="text-[#D6CEBE] dark:text-[#3D3834]">·</span>
                     <span
@@ -364,7 +453,7 @@ export const HomePage: React.FC = () => {
                         pickRandomSpark(sparkRef);
                       }}
                       className="px-2.5 py-1 rounded-lg bg-white/80 dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#2F2B28] text-[11px] font-medium text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] flex items-center gap-1.5 transition-colors shrink-0"
-                      title="Acak pemikiran lain"
+                      title="Acak bacaan lain"
                     >
                       <RefreshCw size={11} />
                       <span>Acak</span>
@@ -372,17 +461,51 @@ export const HomePage: React.FC = () => {
                   )}
                 </div>
 
-                <h2 className="font-serif text-lg sm:text-2xl font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors leading-snug">
+                <h2 className="font-serif text-xl sm:text-3xl font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors leading-snug">
                   {activeSpark.item.title || 'Untitled'}
                 </h2>
 
-                <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] mt-1.5 sm:mt-2 leading-relaxed line-clamp-3">
-                  {activeSpark.kind === 'note'
-                    ? activeSpark.item.excerpt || 'Buka catatan untuk membaca selengkapnya.'
-                    : activeSpark.item.content || 'Buka fragment untuk membaca selengkapnya.'}
-                </p>
+                <div className="mt-2.5 sm:mt-3.5 space-y-2.5 max-w-3xl">
+                  {visibleSparkParagraphs.length > 0 ? (
+                    visibleSparkParagraphs.map((para, idx) => (
+                      <p
+                        key={idx}
+                        className="text-[13px] sm:text-[15px] text-[#3F3A35] dark:text-[#D1C9BE] leading-relaxed sm:leading-[1.7]"
+                      >
+                        {para}
+                      </p>
+                    ))
+                  ) : (
+                    <p className="text-xs sm:text-sm text-[#9C9388] dark:text-[#736C62] italic">
+                      Catatan ini belum memiliki isi tulisan. Ketuk untuk mulai menulis.
+                    </p>
+                  )}
+                </div>
 
-                <div className="flex flex-wrap items-center justify-between gap-2 mt-3 pt-2.5 border-t border-[#E8E2D8]/80 dark:border-[#2F2B28]/80 text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
+                {sparkReadingData.isLong && (
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsSparkExpanded((prev) => !prev);
+                    }}
+                    className="mt-2.5 inline-flex items-center gap-1 text-xs font-medium text-[#9A3412] dark:text-[#EA580C] hover:underline"
+                  >
+                    {isSparkExpanded ? (
+                      <>
+                        <ChevronUp size={13} />
+                        <span>Ringkas bacaan</span>
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown size={13} />
+                        <span>Baca utuh di sini</span>
+                      </>
+                    )}
+                  </button>
+                )}
+
+                <div className="flex flex-wrap items-center justify-between gap-2 mt-3.5 pt-2.5 border-t border-[#E8E2D8]/80 dark:border-[#2F2B28]/80 text-[11px] font-mono text-[#9C9388] dark:text-[#736C62]">
                   <div className="flex items-center gap-2 truncate">
                     <span>
                       {formatDisplayDate(
@@ -404,22 +527,24 @@ export const HomePage: React.FC = () => {
                     )}
                   </div>
                   <span className="inline-flex items-center gap-1 text-[#9A3412] dark:text-[#EA580C] font-sans font-medium shrink-0">
-                    <span>Buka</span>
+                    <span>{activeSpark.kind === 'note' ? 'Buka di Editor' : 'Buka Fragment'}</span>
                     <ArrowUpRight size={12} />
                   </span>
                 </div>
-              </div>
+              </article>
             )}
 
             {/* ==============================================================
-                MAIN WORKSPACE SPLIT (Desktop: 2 Kolom | Mobile: 2 Blok Rapi)
+                MAIN EDITORIAL WORKSPACE
+                Desktop (lg): Kolom Kiri (Baca & Lanjutkan) | Kolom Kanan (Proyek & Sorotan)
+                Mobile: Alur baca berurutan dari atas ke bawah
                ============================================================== */}
-            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 sm:gap-8">
-              {/* BLOK 2: LANJUTKAN MENGOLAH (Synthesis + Recent Notes + Fragments Masuk) */}
-              <div className="lg:col-span-7 space-y-4 sm:space-y-6">
-                {/* Living Synthesis Spotlight (jika ada dokumen sintesis) */}
+            <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 lg:gap-8">
+              {/* KOLOM KIRI (lg:col-span-7): RUANG BACA & LANJUTKAN KARYA */}
+              <div className="lg:col-span-7 space-y-5 sm:space-y-6">
+                {/* 1. Living Synthesis Terbaru (Isi naskah terbaca jelas, bukan sekadar notice) */}
                 {latestSynthesisInfo && (
-                  <div className="space-y-2">
+                  <section className="space-y-2">
                     <div className="flex items-center justify-between">
                       <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1] flex items-center gap-1.5">
                         <Sparkles size={15} className="text-[#6D28D9] dark:text-[#A78BFA]" />
@@ -440,24 +565,14 @@ export const HomePage: React.FC = () => {
                         setActiveNoteId(latestSynthesisInfo.note.id);
                         setActiveView('editor');
                       }}
-                      className="p-3 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-violet-200/80 dark:border-violet-900/50 hover:border-violet-300 dark:hover:border-violet-700/60 cursor-pointer transition-all shadow-2xs group"
+                      className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-violet-200/80 dark:border-violet-900/50 hover:border-violet-300 dark:hover:border-violet-700/60 cursor-pointer transition-all shadow-2xs group"
                     >
-                      <div className="flex items-start justify-between gap-3">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-[#6D28D9] dark:text-[#A78BFA]">
-                            <span>Synthesis</span>
-                            <span className="text-[#9C9388] dark:text-[#736C62]">
-                              · {formatDisplayDate(latestSynthesisInfo.note.updatedAt)}
-                            </span>
-                          </div>
-                          <h3 className="font-serif text-sm sm:text-base font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#6D28D9] dark:group-hover:text-[#A78BFA] transition-colors mt-0.5 line-clamp-1">
-                            {latestSynthesisInfo.note.title || 'Untitled Synthesis'}
-                          </h3>
-                          <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-1 line-clamp-2 leading-relaxed">
-                            {latestSynthesisInfo.hasNewCandidates
-                              ? 'Ada catatan atau fragment baru sejak sintesis ini terakhir diperbarui.'
-                              : latestSynthesisInfo.note.excerpt || 'Dokumen sintesis siap dibaca atau diperkaya lagi.'}
-                          </p>
+                      <div className="flex items-center justify-between gap-2 mb-1.5">
+                        <div className="flex items-center gap-2 text-[10px] font-mono uppercase tracking-wider text-[#6D28D9] dark:text-[#A78BFA]">
+                          <span>Synthesis</span>
+                          <span className="text-[#9C9388] dark:text-[#736C62]">
+                            · {formatDisplayDate(latestSynthesisInfo.note.updatedAt)}
+                          </span>
                         </div>
 
                         <button
@@ -466,19 +581,31 @@ export const HomePage: React.FC = () => {
                             e.stopPropagation();
                             startUpdateSynthesis(latestSynthesisInfo.note.id);
                           }}
-                          className="px-2.5 py-1.5 rounded-lg bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-900/50 text-[11px] font-medium text-[#6D28D9] dark:text-[#A78BFA] hover:bg-violet-100 dark:hover:bg-violet-900/40 transition-colors shrink-0 flex items-center gap-1"
+                          className="px-2.5 py-1 rounded-lg bg-violet-50 dark:bg-violet-950/40 border border-violet-200 dark:border-violet-900/50 text-[11px] font-medium text-[#6D28D9] dark:text-[#A78BFA] hover:bg-violet-100 dark:hover:bg-violet-900/40 transition-colors shrink-0 flex items-center gap-1"
                         >
                           <Sparkles size={11} />
-                          <span>Perbarui</span>
+                          <span>{latestSynthesisInfo.hasNewCandidates ? 'Perbarui · Ada Materi Baru' : 'Perbarui'}</span>
                         </button>
                       </div>
+
+                      <h3 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#6D28D9] dark:group-hover:text-[#A78BFA] transition-colors leading-snug">
+                        {latestSynthesisInfo.note.title || 'Untitled Synthesis'}
+                      </h3>
+
+                      <p className="text-xs sm:text-[13px] text-[#575049] dark:text-[#B8B0A4] mt-1.5 line-clamp-4 leading-relaxed">
+                        {getReadablePreviewText(
+                          latestSynthesisInfo.note.content,
+                          latestSynthesisInfo.note.excerpt || 'Dokumen sintesis siap dibaca atau diperkaya lagi.',
+                          380
+                        )}
+                      </p>
                     </div>
-                  </div>
+                  </section>
                 )}
 
-                {/* Catatan Terbaru (Sedang Ditulis) */}
+                {/* 2. Lanjutkan Menulis (Maks 2 catatan dengan cuplikan 3-4 baris yang terbaca) */}
                 {recentWritingNotes.length > 0 && (
-                  <div className="space-y-2 sm:space-y-2.5">
+                  <section className="space-y-2 sm:space-y-2.5">
                     <div className="flex items-center justify-between">
                       <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
                         Lanjutkan Menulis
@@ -493,49 +620,56 @@ export const HomePage: React.FC = () => {
                       </button>
                     </div>
 
-                    <div className="space-y-2">
-                      {recentWritingNotes.map((note) => (
-                        <div
-                          key={note.id}
-                          onClick={() => {
-                            setActiveNoteId(note.id);
-                            setActiveView('editor');
-                          }}
-                          className="p-3 sm:p-3.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group"
-                        >
-                          <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-0.5">
-                            <span
-                              className={`inline-flex items-center gap-1 uppercase tracking-wider font-semibold ${getTypeBadgeClass(
-                                note.type
-                              )}`}
-                            >
-                              {note.type === 'synthesis' && <Sparkles size={10} />}
-                              <span>{note.type}</span>
-                            </span>
-                            <span>{formatDisplayDate(note.updatedAt)}</span>
+                    <div className="space-y-2.5">
+                      {recentWritingNotes.map((note) => {
+                        const previewText = getReadablePreviewText(
+                          note.content,
+                          note.excerpt,
+                          320
+                        );
+                        return (
+                          <div
+                            key={note.id}
+                            onClick={() => {
+                              setActiveNoteId(note.id);
+                              setActiveView('editor');
+                            }}
+                            className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group"
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-1">
+                              <span
+                                className={`inline-flex items-center gap-1 uppercase tracking-wider font-semibold ${getTypeBadgeClass(
+                                  note.type
+                                )}`}
+                              >
+                                {note.type === 'synthesis' && <Sparkles size={10} />}
+                                <span>{note.type}</span>
+                              </span>
+                              <span>{formatDisplayDate(note.updatedAt)}</span>
+                            </div>
+
+                            <h3 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors leading-snug">
+                              {note.title || 'Untitled Note'}
+                            </h3>
+
+                            {previewText && (
+                              <p className="text-xs sm:text-[13px] text-[#575049] dark:text-[#B8B0A4] line-clamp-3 sm:line-clamp-4 mt-1.5 leading-relaxed">
+                                {previewText}
+                              </p>
+                            )}
                           </div>
-
-                          <h3 className="font-serif text-sm sm:text-base font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors line-clamp-1">
-                            {note.title || 'Untitled Note'}
-                          </h3>
-
-                          {note.excerpt && (
-                            <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-1 mt-0.5">
-                              {note.excerpt}
-                            </p>
-                          )}
-                        </div>
-                      ))}
+                        );
+                      })}
                     </div>
-                  </div>
+                  </section>
                 )}
 
-                {/* Fragment Masuk untuk Diolah */}
+                {/* 3. Fragment Terbaru (Terbaca utuh di tempat, bukan 1 baris terpotong) */}
                 {recentFragments.length > 0 && (
-                  <div className="space-y-2 sm:space-y-2.5">
+                  <section className="space-y-2 sm:space-y-2.5">
                     <div className="flex items-center justify-between">
                       <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                        Fragment Siap Diolah
+                        Fragment Terbaru
                       </h2>
                       <button
                         type="button"
@@ -553,17 +687,17 @@ export const HomePage: React.FC = () => {
                       </p>
                     )}
 
-                    <div className="space-y-2">
+                    <div className="space-y-2.5">
                       {recentFragments.map((fragment) => {
                         const isPromoting = promotingFragmentId === fragment.id;
                         return (
                           <div
                             key={fragment.id}
                             onClick={() => openFragmentDrawer(fragment.id)}
-                            className="p-3 sm:p-3.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group flex items-start justify-between gap-2.5"
+                            className="p-3.5 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group"
                           >
-                            <div className="min-w-0 flex-1">
-                              <div className="flex items-center gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-0.5">
+                            <div className="flex items-center justify-between gap-2 mb-1">
+                              <div className="flex items-center gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62]">
                                 <span
                                   className={`uppercase tracking-wider font-semibold ${getTypeBadgeClass(
                                     fragment.type
@@ -574,179 +708,293 @@ export const HomePage: React.FC = () => {
                                 <span>·</span>
                                 <span>{formatDisplayDate(fragment.date)}</span>
                               </div>
-                              <h3 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors line-clamp-1">
-                                {fragment.title || 'Untitled Fragment'}
-                              </h3>
-                              {fragment.content && (
-                                <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-1 mt-0.5">
-                                  {fragment.content}
-                                </p>
-                              )}
+
+                              <button
+                                type="button"
+                                onClick={(e) => handlePromoteFragment(e, fragment.id)}
+                                disabled={Boolean(promotingFragmentId)}
+                                title="Jadikan Note penuh di Library"
+                                className="px-2 py-1 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#272422] text-[11px] font-medium text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] hover:border-[#9A3412]/40 dark:hover:border-[#EA580C]/40 transition-colors shrink-0 flex items-center gap-1 disabled:opacity-50"
+                              >
+                                {isPromoting ? (
+                                  <Loader2 size={11} className="animate-spin" />
+                                ) : (
+                                  <BookOpen size={11} />
+                                )}
+                                <span>Jadikan Note</span>
+                              </button>
                             </div>
 
-                            <button
-                              type="button"
-                              onClick={(e) => handlePromoteFragment(e, fragment.id)}
-                              disabled={Boolean(promotingFragmentId)}
-                              title="Jadikan Note penuh di Library"
-                              className="px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#272422] text-[11px] font-medium text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] hover:border-[#9A3412]/40 dark:hover:border-[#EA580C]/40 transition-colors shrink-0 flex items-center gap-1 disabled:opacity-50"
-                            >
-                              {isPromoting ? (
-                                <Loader2 size={11} className="animate-spin" />
-                              ) : (
-                                <BookOpen size={11} />
-                              )}
-                              <span>Jadikan Note</span>
-                            </button>
+                            <h3 className="font-serif text-sm sm:text-base font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
+                              {fragment.title || 'Untitled Fragment'}
+                            </h3>
+
+                            {fragment.content && (
+                              <p className="text-xs sm:text-[13px] text-[#575049] dark:text-[#B8B0A4] line-clamp-5 mt-1.5 leading-relaxed whitespace-pre-line">
+                                {fragment.content}
+                              </p>
+                            )}
                           </div>
                         );
                       })}
                     </div>
-                  </div>
+                  </section>
                 )}
               </div>
 
-              {/* BLOK 3: GABUNGAN FAVORIT & JEJAK DISCOVER (Ringkas untuk Mobile & Desktop) */}
-              <div className="lg:col-span-5 space-y-2.5 sm:space-y-3">
-                <div className="flex items-center justify-between">
-                  <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                    Sorotan &amp; Koneksi
-                  </h2>
-                  <button
-                    type="button"
-                    onClick={() => setActiveView('discover')}
-                    className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
-                  >
-                    <span>Explore Discover</span>
-                    <ArrowRight size={12} />
-                  </button>
-                </div>
+              {/* KOLOM KANAN (lg:col-span-5): PROYEK BERJALAN + SOROTAN & KONEKSI */}
+              <div className="lg:col-span-5 space-y-5 sm:space-y-6">
+                {/* 4. Proyek Berjalan (Maks 2 proyek aktif, ringkas & informatif) */}
+                <section className="space-y-2 sm:space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1] flex items-center gap-1.5">
+                      <FolderKanban size={15} className="text-[#9A3412] dark:text-[#EA580C]" />
+                      <span>Proyek Berjalan</span>
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView('projects')}
+                      className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
+                    >
+                      <span>Projects</span>
+                      <ArrowRight size={12} />
+                    </button>
+                  </div>
 
-                <div className="rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] divide-y divide-[#E8E2D8]/70 dark:divide-[#2F2B28]/70 overflow-hidden shadow-2xs">
-                  {/* Bagian A: Jejak Discover (Approved Connections / Topic Cluster / Ajakan Discover) */}
-                  {approvedHighlights.length > 0 ? (
-                    approvedHighlights.map((conn) => (
+                  {activeHomeProjects.length > 0 ? (
+                    <div className="space-y-2">
+                      {activeHomeProjects.map((proj) => {
+                        const secList = getSortedProjectSections(proj);
+                        const doneCount = secList.filter((s) => s.status === 'done').length;
+                        const words = countProjectTotalWords(proj);
+                        const isReview = proj.status === 'review';
+
+                        return (
+                          <div
+                            key={proj.id}
+                            onClick={() => openProject(proj.id)}
+                            className="p-3 sm:p-3.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] hover:border-[#D6CEBE] dark:hover:border-[#443E3A] cursor-pointer transition-all shadow-2xs group"
+                          >
+                            <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-1">
+                              <span
+                                className={`inline-flex items-center gap-1 uppercase tracking-wider font-semibold ${
+                                  isReview
+                                    ? 'text-[#B45309] dark:text-[#F59E0B]'
+                                    : 'text-[#9A3412] dark:text-[#EA580C]'
+                                }`}
+                              >
+                                {isReview ? 'Meninjau' : 'Aktif'}
+                              </span>
+                              <div className="flex items-center gap-2 shrink-0">
+                                {proj.deadline && (
+                                  <span className="inline-flex items-center gap-1">
+                                    <Calendar size={10} />
+                                    <span>{proj.deadline}</span>
+                                  </span>
+                                )}
+                                <span>{proj.progress}%</span>
+                              </div>
+                            </div>
+
+                            <h3 className="font-serif text-sm sm:text-base font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors line-clamp-1">
+                              {proj.title}
+                            </h3>
+
+                            {proj.description && (
+                              <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 mt-0.5 leading-relaxed">
+                                {proj.description}
+                              </p>
+                            )}
+
+                            <div className="mt-2.5 flex items-center gap-2.5">
+                              <div className="flex-1 h-1.5 rounded-full bg-[#EFEAE2] dark:bg-[#2A2724] overflow-hidden">
+                                <div
+                                  className="h-full rounded-full bg-[#9A3412] dark:bg-[#EA580C] transition-all"
+                                  style={{ width: `${Math.min(100, Math.max(0, proj.progress))}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] shrink-0">
+                                {secList.length > 0
+                                  ? `${doneCount}/${secList.length} bagian · `
+                                  : ''}
+                                {words.toLocaleString('id-ID')} kata
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="p-3 sm:p-4 rounded-xl bg-white dark:bg-[#1E1C1A] border border-dashed border-[#D6CEBE] dark:border-[#3A3531] flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs sm:text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                          Belum ada proyek berjalan
+                        </p>
+                        <p className="text-[11px] sm:text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5">
+                          Susun kerangka naskahmu jadi satu karya utuh.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => setActiveView('projects')}
+                        className="px-2.5 py-1.5 rounded-lg bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C] hover:bg-[#9A3412]/15 dark:hover:bg-[#EA580C]/25 text-xs font-medium flex items-center gap-1 shrink-0 transition-colors"
+                      >
+                        <Plus size={13} />
+                        <span>Studio</span>
+                      </button>
+                    </div>
+                  )}
+                </section>
+
+                {/* 5. Sorotan & Koneksi (Discover Insights + Favorit dengan preview terbaca) */}
+                <section className="space-y-2 sm:space-y-2.5">
+                  <div className="flex items-center justify-between">
+                    <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                      Sorotan &amp; Koneksi
+                    </h2>
+                    <button
+                      type="button"
+                      onClick={() => setActiveView('discover')}
+                      className="text-xs text-[#9A3412] dark:text-[#EA580C] hover:underline flex items-center gap-1 font-medium"
+                    >
+                      <span>Explore Discover</span>
+                      <ArrowRight size={12} />
+                    </button>
+                  </div>
+
+                  <div className="rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] divide-y divide-[#E8E2D8]/70 dark:divide-[#2F2B28]/70 overflow-hidden shadow-2xs">
+                    {approvedHighlights.length > 0 ? (
+                      approvedHighlights.map((conn) => (
+                        <div
+                          key={conn.pairKey}
+                          onClick={() => {
+                            if (conn.kindA === 'note') {
+                              setActiveNoteId(conn.idA);
+                              setActiveView('editor');
+                            } else {
+                              openFragmentDrawer(conn.idA);
+                            }
+                          }}
+                          className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] mb-1">
+                            <span className="inline-flex items-center gap-1 uppercase tracking-wider font-semibold">
+                              <GitBranch size={11} />
+                              <span>
+                                {conn.relationshipType
+                                  ? RELATIONSHIP_LABELS[conn.relationshipType]
+                                  : 'Koneksi Terhubung'}
+                              </span>
+                            </span>
+                            <ArrowUpRight
+                              size={12}
+                              className="text-[#9C9388] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] shrink-0"
+                            />
+                          </div>
+                          <p className="font-serif text-xs sm:text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] leading-snug">
+                            {conn.titleA} <span className="text-[#9C9388] font-sans">↔</span> {conn.titleB}
+                          </p>
+                          {conn.insight && (
+                            <p className="text-xs text-[#575049] dark:text-[#B8B0A4] line-clamp-3 sm:line-clamp-4 mt-1.5 leading-relaxed">
+                              {conn.insight}
+                            </p>
+                          )}
+                        </div>
+                      ))
+                    ) : savedClusterTheme ? (
                       <div
-                        key={conn.pairKey}
-                        onClick={() => {
-                          if (conn.kindA === 'note') {
-                            setActiveNoteId(conn.idA);
-                            setActiveView('editor');
-                          } else {
-                            openFragmentDrawer(conn.idA);
-                          }
-                        }}
+                        onClick={() => setActiveView('discover')}
                         className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
                       >
                         <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] mb-1">
                           <span className="inline-flex items-center gap-1 uppercase tracking-wider font-semibold">
-                            <GitBranch size={11} />
-                            <span>
-                              {conn.relationshipType
-                                ? RELATIONSHIP_LABELS[conn.relationshipType]
-                                : 'Koneksi Terhubung'}
-                            </span>
+                            <Layers size={11} />
+                            <span>Klaster Topik</span>
                           </span>
                           <ArrowUpRight
                             size={12}
                             className="text-[#9C9388] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] shrink-0"
                           />
                         </div>
-                        <p className="font-serif text-xs sm:text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] line-clamp-1">
-                          {conn.titleA} <span className="text-[#9C9388] font-sans">↔</span> {conn.titleB}
+                        <p className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                          {savedClusterTheme.themeTitle}
                         </p>
-                        {conn.insight && (
-                          <p className="text-[11px] sm:text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 mt-1 leading-relaxed">
-                            {conn.insight}
-                          </p>
-                        )}
+                        <p className="text-xs text-[#575049] dark:text-[#B8B0A4] line-clamp-3 sm:line-clamp-4 mt-1 leading-relaxed">
+                          {savedClusterTheme.themeDescription}
+                        </p>
                       </div>
-                    ))
-                  ) : savedClusterTheme ? (
-                    <div
-                      onClick={() => setActiveView('discover')}
-                      className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] mb-1">
-                        <span className="inline-flex items-center gap-1 uppercase tracking-wider font-semibold">
-                          <Layers size={11} />
-                          <span>Klaster Topik</span>
-                        </span>
-                        <ArrowUpRight
-                          size={12}
-                          className="text-[#9C9388] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] shrink-0"
-                        />
-                      </div>
-                      <p className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] line-clamp-1">
-                        {savedClusterTheme.themeTitle}
-                      </p>
-                      <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 mt-1 leading-relaxed">
-                        {savedClusterTheme.themeDescription}
-                      </p>
-                    </div>
-                  ) : (
-                    <div
-                      onClick={() => setActiveView('discover')}
-                      className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] mb-1">
-                        <span className="inline-flex items-center gap-1 uppercase tracking-wider font-semibold">
-                          <Sparkles size={11} />
-                          <span>Discover Workspace</span>
-                        </span>
-                        <ArrowUpRight
-                          size={12}
-                          className="text-[#9C9388] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] shrink-0"
-                        />
-                      </div>
-                      <p className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                        Temukan keterkaitan antar pemikiranmu
-                      </p>
-                      <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5 leading-relaxed">
-                        Jelajahi koneksi ide yang mirip atau rangkai beberapa catatan menjadi satu dokumen sintesis.
-                      </p>
-                    </div>
-                  )}
-
-                  {/* Bagian B: Favorit & Bintang Pilihan (Digabung dalam container yang sama) */}
-                  {starredItems.map((entry) => (
-                    <div
-                      key={`${entry.kind}-${entry.item.id}`}
-                      onClick={() => handleOpenEntry(entry)}
-                      className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
-                    >
-                      <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-0.5">
-                        <span className="inline-flex items-center gap-1.5">
-                          <Star
-                            size={11}
-                            fill="currentColor"
-                            className="text-[#B45309] dark:text-[#F59E0B] shrink-0"
-                          />
-                          <span
-                            className={`uppercase tracking-wider font-semibold ${getTypeBadgeClass(
-                              entry.item.type
-                            )}`}
-                          >
-                            {entry.kind === 'fragment' ? `Fragment · ${entry.item.type}` : entry.item.type}
+                    ) : (
+                      <div
+                        onClick={() => setActiveView('discover')}
+                        className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
+                      >
+                        <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9A3412] dark:text-[#EA580C] mb-1">
+                          <span className="inline-flex items-center gap-1 uppercase tracking-wider font-semibold">
+                            <Sparkles size={11} />
+                            <span>Discover Workspace</span>
                           </span>
-                        </span>
-                        <span>
-                          {formatDisplayDate(
-                            entry.kind === 'note' ? entry.item.updatedAt : entry.item.date
-                          )}
-                        </span>
+                          <ArrowUpRight
+                            size={12}
+                            className="text-[#9C9388] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] shrink-0"
+                          />
+                        </div>
+                        <p className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                          Temukan keterkaitan antar pemikiranmu
+                        </p>
+                        <p className="text-xs text-[#6B635B] dark:text-[#A8A196] mt-0.5 leading-relaxed">
+                          Jelajahi koneksi ide yang mirip atau rangkai beberapa catatan menjadi satu dokumen sintesis.
+                        </p>
                       </div>
+                    )}
 
-                      <h3 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors line-clamp-1">
-                        {entry.item.title || 'Untitled'}
-                      </h3>
+                    {/* Favorit Pilihan (2 item, dengan preview terbaca 3 baris) */}
+                    {starredItems.map((entry) => {
+                      const previewText =
+                        entry.kind === 'note'
+                          ? getReadablePreviewText(entry.item.content, entry.item.excerpt, 240)
+                          : (entry.item.content || '').trim();
+                      return (
+                        <div
+                          key={`${entry.kind}-${entry.item.id}`}
+                          onClick={() => handleOpenEntry(entry)}
+                          className="p-3 sm:p-3.5 hover:bg-[#FAF7F2] dark:hover:bg-[#272422]/60 cursor-pointer transition-colors group"
+                        >
+                          <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-0.5">
+                            <span className="inline-flex items-center gap-1.5">
+                              <Star
+                                size={11}
+                                fill="currentColor"
+                                className="text-[#B45309] dark:text-[#F59E0B] shrink-0"
+                              />
+                              <span
+                                className={`uppercase tracking-wider font-semibold ${getTypeBadgeClass(
+                                  entry.item.type
+                                )}`}
+                              >
+                                {entry.kind === 'fragment' ? `Fragment · ${entry.item.type}` : entry.item.type}
+                              </span>
+                            </span>
+                            <span>
+                              {formatDisplayDate(
+                                entry.kind === 'note' ? entry.item.updatedAt : entry.item.date
+                              )}
+                            </span>
+                          </div>
 
-                      <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-1 mt-0.5">
-                        {entry.kind === 'note' ? entry.item.excerpt : entry.item.content}
-                      </p>
-                    </div>
-                  ))}
-                </div>
+                          <h3 className="font-serif text-sm font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors leading-snug">
+                            {entry.item.title || 'Untitled'}
+                          </h3>
+
+                          {previewText && (
+                            <p className="text-xs text-[#575049] dark:text-[#B8B0A4] line-clamp-3 mt-1 leading-relaxed">
+                              {previewText}
+                            </p>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               </div>
             </div>
           </>

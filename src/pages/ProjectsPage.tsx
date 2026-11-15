@@ -119,7 +119,9 @@ export const ProjectsPage: React.FC = () => {
   const {
     projects,
     activeProjectId,
-    setActiveProjectId,
+    openProject,
+    closeProject,
+    backTargetLabel,
     projectsTableMissing,
     createProject,
     updateProject,
@@ -196,6 +198,11 @@ export const ProjectsPage: React.FC = () => {
   useBackOverlay(showLinkPicker, () => setShowLinkPicker(false), 'projects-link-modal');
   useBackOverlay(Boolean(projectToDelete), () => setProjectToDelete(null), 'projects-delete-modal');
   useBackOverlay(showStatusMenu, () => setShowStatusMenu(false), 'projects-status-menu');
+  useBackOverlay(
+    Boolean(desktopRefReaderKey),
+    () => setDesktopRefReaderKey(null),
+    'projects-desktop-ref-reader'
+  );
   useBackOverlay(
     Boolean(mobileRefReaderKey),
     () => setMobileRefReaderKey(null),
@@ -352,15 +359,12 @@ export const ProjectsPage: React.FC = () => {
     setReturnTabAfterDetail(sourceTab);
     setDetailMode(mode);
     setMobileDetailTab(mode === 'master' ? 'master' : 'sections');
-    setActiveProjectId(projectId);
+    openProject(projectId);
   };
 
   const handleExitProjectDetail = () => {
-    if (activeProject) {
-      flushProjectSave(activeProject.id);
-    }
     setTopTab(returnTabAfterDetail);
-    setActiveProjectId(null);
+    closeProject();
   };
 
   const handleEditMaterialInOrigin = (kind: 'note' | 'fragment', id: string) => {
@@ -804,7 +808,11 @@ export const ProjectsPage: React.FC = () => {
                 >
                   <ArrowLeft size={13} />
                   <span className="hidden sm:inline">
-                    {returnTabAfterDetail === 'catalog' ? 'Katalog Karya' : 'Studio Kerja'}
+                    {backTargetLabel === 'Home'
+                      ? 'Home'
+                      : returnTabAfterDetail === 'catalog'
+                      ? 'Katalog Karya'
+                      : 'Studio Kerja'}
                   </span>
                 </button>
 
