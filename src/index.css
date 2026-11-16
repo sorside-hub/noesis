@@ -87,7 +87,8 @@
 
 .tiptap p {
   margin-top: 0;
-  margin-bottom: 0.95em;
+  margin-bottom: 0;
+  min-height: 1.5em;
 }
 .tiptap p:last-child {
   margin-bottom: 0;
@@ -201,7 +202,9 @@
   color: var(--text-secondary);
 }
 .tiptap blockquote p {
-  margin-bottom: 0.5em;
+  margin-top: 0;
+  margin-bottom: 0;
+  min-height: 1.5em;
 }
 .tiptap blockquote p:last-child {
   margin-bottom: 0;

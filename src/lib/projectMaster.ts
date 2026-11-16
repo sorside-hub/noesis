@@ -170,7 +170,10 @@ const serializeNodeToMarkdown = (node: Node): string => {
       return '---\n\n';
     case 'p': {
       const inner = childrenText().trim();
-      return inner ? `${inner}\n\n` : '';
+      if (!inner) return '\n';
+      const nextEl = el.nextElementSibling;
+      const nextIsP = Boolean(nextEl && nextEl.tagName.toLowerCase() === 'p');
+      return nextIsP ? `${inner}\n` : `${inner}\n\n`;
     }
     default:
       return childrenText();

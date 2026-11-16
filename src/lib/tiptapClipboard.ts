@@ -90,7 +90,8 @@ const hasRichSemanticHtml = (html: string, plainText: string): boolean => {
 };
 
 /**
- * Sanitizes parsed HTML, removes empty spacer paragraphs/divs, and clamps headings to editor limits.
+ * Sanitizes parsed HTML, preserves intentional empty paragraph spacers (<p><br></p>) for Enter 2x,
+ * collapses redundant empty spacers, and clamps headings to editor limits.
  */
 export const sanitizeAndNormalizeHtml = (
   rawHtml: string,
@@ -148,21 +149,66 @@ export const sanitizeAndNormalizeHtml = (
     }
   });
 
-  // 5. Remove empty spacer <p> / <div> nodes (since CSS .tiptap already provides paragraph spacing)
-  body.querySelectorAll('p, div').forEach((block) => {
-    if (block.querySelector('img, figure, hr, pre, ul, ol, blockquote, table')) return;
-    const text = (block.textContent || '').replace(/\u00a0/g, '').trim();
-    if (text.length === 0) {
-      block.remove();
+  // 5. Normalize empty spacer <p> / <div> blocks:
+  // - Preserve intentional blank line spacers (<p><br></p>) for Enter 2x behavior.
+  // - Collapse multiple consecutive empty blocks down to at most 1 empty spacer.
+  // - Strip leading and trailing empty blocks, and empty blocks immediately adjacent to headings.
+  const childBlocks = Array.from(body.children);
+  let lastWasEmptyParagraph = false;
+
+  for (let i = 0; i < childBlocks.length; i++) {
+    const el = childBlocks[i];
+    const tag = el.tagName.toLowerCase();
+
+    // If it's a div, convert to p if it acts as a paragraph block
+    let targetEl = el;
+    if (
+      tag === 'div' &&
+      !el.querySelector('h1, h2, h3, h4, h5, h6, ul, ol, blockquote, pre, table, img, figure')
+    ) {
+      const p = doc.createElement('p');
+      p.innerHTML = el.innerHTML;
+      el.replaceWith(p);
+      targetEl = p;
     }
-  });
+
+    const currentTag = targetEl.tagName.toLowerCase();
+    if (currentTag === 'p') {
+      if (targetEl.querySelector('img, figure, hr, pre, ul, ol, blockquote, table')) {
+        lastWasEmptyParagraph = false;
+        continue;
+      }
+      const text = (targetEl.textContent || '').replace(/\u00a0/g, '').trim();
+      const isEmpty = text.length === 0;
+
+      if (isEmpty) {
+        const prevSibling = targetEl.previousElementSibling;
+        const nextSibling = targetEl.nextElementSibling;
+        const prevIsHeading = Boolean(prevSibling && /^h[1-6]$/i.test(prevSibling.tagName));
+        const nextIsHeading = Boolean(nextSibling && /^h[1-6]$/i.test(nextSibling.tagName));
+
+        if (!prevSibling || !nextSibling || prevIsHeading || nextIsHeading || lastWasEmptyParagraph) {
+          targetEl.remove();
+        } else {
+          targetEl.innerHTML = '<br>';
+          lastWasEmptyParagraph = true;
+        }
+      } else {
+        lastWasEmptyParagraph = false;
+      }
+    } else {
+      lastWasEmptyParagraph = false;
+    }
+  }
 
   return body.innerHTML;
 };
 
 /**
  * Converts Markdown or plain text into clean HTML compatible with Tiptap.
- * Single-line inline snippets stay inline (no <p> wrapper) so mid-sentence pastes stay smooth.
+ * - Single newline in plain text produces tight paragraphs (<p>line1</p><p>line2</p>).
+ * - Double newline in plain text produces an intentional empty spacer (<p>line1</p><p><br></p><p>line2</p>).
+ * - Single-line inline snippets stay inline (no <p> wrapper) so mid-sentence pastes stay smooth.
  */
 export const markdownOrPlainToCleanHtml = (
   rawText: string,
@@ -174,9 +220,41 @@ export const markdownOrPlainToCleanHtml = (
   const isSingleLineInline =
     !normalized.includes('\n') && !SINGLE_LINE_BLOCK_REGEX.test(normalized);
 
-  const rendered = isSingleLineInline
-    ? markdownParser.parseInline(normalized, { async: false })
-    : markdownParser.parse(normalized, { async: false });
+  if (isSingleLineInline) {
+    return markdownParser.parseInline(normalized, { async: false });
+  }
+
+  // Pure plain text (e.g. copied from WhatsApp, Telegram, or Notepad without Markdown syntax)
+  if (!MARKDOWN_SYNTAX_REGEX.test(normalized)) {
+    const lines = normalized.split('\n');
+    const htmlBlocks: string[] = [];
+    let lastWasBlank = false;
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed) {
+        if (!lastWasBlank && htmlBlocks.length > 0) {
+          htmlBlocks.push('<p><br></p>');
+          lastWasBlank = true;
+        }
+      } else {
+        htmlBlocks.push(`<p>${escapeHtmlText(line)}</p>`);
+        lastWasBlank = false;
+      }
+    }
+
+    while (htmlBlocks.length > 0 && htmlBlocks[htmlBlocks.length - 1] === '<p><br></p>') {
+      htmlBlocks.pop();
+    }
+
+    return htmlBlocks.join('');
+  }
+
+  // Markdown syntax detected: parse with Marked
+  let rendered = markdownParser.parse(normalized, { async: false });
+  // In Markdown, two consecutive <p> tags represent two paragraphs separated by \n\n.
+  // Insert intentional blank line spacer <p><br></p> between them so they render with the blank line gap:
+  rendered = rendered.replace(/<\/p>\s*<p>/g, '</p><p><br></p><p>');
 
   return sanitizeAndNormalizeHtml(rendered, {
     minHeadingLevel: options?.minHeadingLevel,
@@ -186,8 +264,24 @@ export const markdownOrPlainToCleanHtml = (
 };
 
 // =========================================================================
-// CLEAN PLAIN-TEXT CLIPBOARD SERIALIZER (Opsi B: Rapi, bebas double newline)
+// CLEAN PLAIN-TEXT CLIPBOARD SERIALIZER
 // =========================================================================
+
+interface SerializedBlock {
+  type: string;
+  text: string;
+}
+
+const isMajorBlock = (type: string): boolean => {
+  return (
+    type === 'heading' ||
+    type === 'bulletList' ||
+    type === 'orderedList' ||
+    type === 'blockquote' ||
+    type === 'codeBlock' ||
+    type === 'horizontalRule'
+  );
+};
 
 const serializeInlineChildren = (node: ProseMirrorNode): string => {
   let out = '';
@@ -299,28 +393,78 @@ const serializeBlockNode = (node: ProseMirrorNode, listDepth = 0): string => {
 };
 
 const serializeFragmentBlocks = (fragment: ProseMirrorFragment): string => {
-  const blocks: string[] = [];
+  const rawBlocks: SerializedBlock[] = [];
 
   fragment.forEach((child) => {
     if (child.isText) {
       const txt = child.text || '';
-      if (txt) blocks.push(txt);
+      if (txt) rawBlocks.push({ type: 'text', text: txt });
       return;
     }
+    const typeName = child.type.name;
     const serialized = serializeBlockNode(child, 0);
-    if (serialized.trim().length > 0) {
-      blocks.push(serialized);
-    }
+    rawBlocks.push({ type: typeName, text: serialized });
   });
 
-  return blocks.join('\n\n');
+  // Filter out leading/trailing empty paragraphs, empty paragraphs adjacent to major blocks,
+  // and collapse consecutive empty paragraphs to at most 1
+  const cleaned: SerializedBlock[] = [];
+  for (let idx = 0; idx < rawBlocks.length; idx++) {
+    const block = rawBlocks[idx];
+    const isBlankParagraph =
+      block.type === 'paragraph' && block.text.trim().length === 0;
+
+    if (isBlankParagraph) {
+      if (cleaned.length === 0) continue;
+      const prev = cleaned[cleaned.length - 1];
+      if (isMajorBlock(prev.type)) continue;
+      const next = rawBlocks[idx + 1];
+      if (next && isMajorBlock(next.type)) continue;
+      if (prev.type === 'paragraph' && prev.text.trim().length === 0) continue;
+    }
+
+    cleaned.push(block);
+  }
+
+  // Remove trailing empty paragraphs
+  while (cleaned.length > 0) {
+    const last = cleaned[cleaned.length - 1];
+    if (last.type === 'paragraph' && last.text.trim().length === 0) {
+      cleaned.pop();
+    } else {
+      break;
+    }
+  }
+
+  if (cleaned.length === 0) return '';
+
+  let out = '';
+  for (let i = 0; i < cleaned.length; i++) {
+    const curr = cleaned[i];
+    if (i === 0) {
+      out += curr.text;
+      continue;
+    }
+    const prev = cleaned[i - 1];
+    const prevIsMajor = isMajorBlock(prev.type);
+    const currIsMajor = isMajorBlock(curr.type);
+
+    if (prevIsMajor || currIsMajor) {
+      out += '\n\n' + curr.text;
+    } else {
+      // Both are paragraphs / inline text: single newline preserves tight line spacing
+      out += '\n' + curr.text;
+    }
+  }
+
+  return out;
 };
 
 /**
  * Serializes a copied ProseMirror Slice into clean plain text:
- * - Blocks (paragraphs, headings, lists, blockquotes) separated by a single blank line (\n\n).
- * - Empty <p></p> nodes ignored so double blank lines never happen.
- * - Bullet/numbered list items separated by a single newline (\n) with '- ' or '1. '.
+ * - Enter 1x (<p>...</p><p>...</p>) serializes tightly with a single newline (\n).
+ * - Enter 2x (empty spacer <p></p>) serializes with an intentional blank line (\n\n).
+ * - Major blocks (headings, lists, blockquotes) separated by \n\n.
  */
 export const serializeSliceToCleanPlainText = (slice: Slice): string => {
   return serializeFragmentBlocks(slice.content);
@@ -335,8 +479,9 @@ const escapeHtmlText = (text: string): string =>
     .replace(/'/g, '&#39;');
 
 /**
- * Strips editor-specific classes/styles, dangerous nodes, and empty spacer paragraphs
- * so copied HTML pastes cleanly into Google Docs, Word, Notion, or Email without dark-mode or spacing artifacts.
+ * Strips editor-specific classes/styles and dangerous nodes, while preserving
+ * intentional blank line spacers (<p><br></p>) so copied HTML pastes cleanly
+ * into Google Docs, Word, Notion, or Email without dark-mode or spacing artifacts.
  */
 const buildCleanClipboardHtml = (title: string, bodyHtml: string): string => {
   const cleanTitle = title.trim();
@@ -349,14 +494,37 @@ const buildCleanClipboardHtml = (title: string, bodyHtml: string): string => {
       if (body) {
         body.querySelectorAll(BLOCKED_TAGS_SELECTOR).forEach((el) => el.remove());
 
-        // Remove empty spacer blocks
-        body.querySelectorAll('p, div').forEach((block) => {
-          if (block.querySelector('img, figure, hr, pre, ul, ol, blockquote, table')) return;
-          const text = (block.textContent || '').replace(/\u00a0/g, '').trim();
-          if (text.length === 0) {
-            block.remove();
+        // Normalize empty spacer blocks (<p><br></p>) for Google Docs / Word compatibility
+        const childBlocks = Array.from(body.children);
+        let lastWasEmpty = false;
+
+        for (const block of childBlocks) {
+          const tag = block.tagName.toLowerCase();
+          if (tag === 'p' || tag === 'div') {
+            if (block.querySelector('img, figure, hr, pre, ul, ol, blockquote, table')) {
+              lastWasEmpty = false;
+              continue;
+            }
+            const text = (block.textContent || '').replace(/\u00a0/g, '').trim();
+            if (text.length === 0) {
+              const prev = block.previousElementSibling;
+              const next = block.nextElementSibling;
+              const prevIsH = Boolean(prev && /^h[1-6]$/i.test(prev.tagName));
+              const nextIsH = Boolean(next && /^h[1-6]$/i.test(next.tagName));
+
+              if (!prev || !next || prevIsH || nextIsH || lastWasEmpty) {
+                block.remove();
+              } else {
+                block.innerHTML = '<br>';
+                lastWasEmpty = true;
+              }
+            } else {
+              lastWasEmpty = false;
+            }
+          } else {
+            lastWasEmpty = false;
           }
-        });
+        }
 
         // Strip Tailwind classes, inline styles, and event handlers
         body.querySelectorAll('*').forEach((el) => {
@@ -399,10 +567,51 @@ const htmlToFallbackPlainText = (rawHtml: string): string => {
     return rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
   }
   const doc = new window.DOMParser().parseFromString(rawHtml, 'text/html');
-  return (doc.body?.innerText || doc.body?.textContent || '')
-    .replace(/\r\n?/g, '\n')
-    .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n')
-    .trim();
+  const body = doc.body;
+  if (!body) return '';
+
+  const blocks: { tag: string; text: string }[] = [];
+  Array.from(body.children).forEach((el) => {
+    const tag = el.tagName.toLowerCase();
+    const text = (el.textContent || '').replace(/\u00a0/g, ' ').trim();
+    blocks.push({ tag, text });
+  });
+
+  const cleaned: { tag: string; text: string }[] = [];
+  for (let i = 0; i < blocks.length; i++) {
+    const b = blocks[i];
+    if (b.tag === 'p' && b.text.length === 0) {
+      if (cleaned.length === 0) continue;
+      const prev = cleaned[cleaned.length - 1];
+      if (/^h[1-6]$/i.test(prev.tag) || (prev.tag === 'p' && prev.text.length === 0)) continue;
+      const next = blocks[i + 1];
+      if (next && /^h[1-6]$/i.test(next.tag)) continue;
+    }
+    cleaned.push(b);
+  }
+
+  while (cleaned.length > 0 && cleaned[cleaned.length - 1].text.length === 0) {
+    cleaned.pop();
+  }
+
+  let out = '';
+  for (let i = 0; i < cleaned.length; i++) {
+    const curr = cleaned[i];
+    if (i === 0) {
+      out += curr.text;
+      continue;
+    }
+    const prev = cleaned[i - 1];
+    const prevIsH = /^h[1-6]$/i.test(prev.tag);
+    const currIsH = /^h[1-6]$/i.test(curr.tag);
+    if (prevIsH || currIsH) {
+      out += '\n\n' + curr.text;
+    } else {
+      out += '\n' + curr.text;
+    }
+  }
+
+  return out.trim();
 };
 
 /**
