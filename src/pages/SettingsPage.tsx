@@ -6,7 +6,6 @@ import {
   Download,
   RotateCcw,
   Check,
-  Type,
   Database,
   Copy,
   Code2,
@@ -43,7 +42,6 @@ export const SettingsPage: React.FC = () => {
   } = useNoesis();
   const [copiedExport, setCopiedExport] = useState(false);
   const [copiedSql, setCopiedSql] = useState(false);
-  const [fontSize, setFontSize] = useState<'standard' | 'generous' | 'large'>('standard');
   const [isSyncingAll, setIsSyncingAll] = useState(false);
   const [syncResult, setSyncResult] = useState<string | null>(null);
 
@@ -267,44 +265,6 @@ export const SettingsPage: React.FC = () => {
               </div>
             </form>
           )}
-        </div>
-
-        {/* Typography & Reading Rhythm */}
-        <div className="p-3.5 sm:p-6 rounded-2xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs space-y-3 sm:space-y-4">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-xl bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center shrink-0">
-              <Type size={16} />
-            </div>
-            <div>
-              <h2 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Typographic Scale
-              </h2>
-              <p className="text-xs text-[#6B635B] dark:text-[#A8A196]">
-                Ukuran dan jarak baris saat membaca tulisan di editor.
-              </p>
-            </div>
-          </div>
-
-          <div className="grid grid-cols-3 gap-2 sm:gap-3">
-            {[
-              { id: 'standard', label: 'Standard', sub: '16px / 1.75' },
-              { id: 'generous', label: 'Generous', sub: '18px / 1.85' },
-              { id: 'large', label: 'Large', sub: '20px / 1.9' },
-            ].map((opt) => (
-              <button
-                key={opt.id}
-                onClick={() => setFontSize(opt.id as any)}
-                className={`p-2.5 sm:p-3 rounded-xl border text-center transition-all ${
-                  fontSize === opt.id
-                    ? 'border-[#9A3412] bg-[#FAF7F2] dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-2xs'
-                    : 'border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2] dark:hover:bg-[#221F1E]'
-                }`}
-              >
-                <div className="text-xs font-medium">{opt.label}</div>
-                <div className="text-[10px] font-mono text-[#9C9388] mt-0.5">{opt.sub}</div>
-              </button>
-            ))}
-          </div>
         </div>
 
         {/* AI Semantic Search Control */}
