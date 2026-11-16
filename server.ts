@@ -12,6 +12,7 @@ import {
   summarizeClusterWithGemini,
   suggestTagsWithGemini,
   assistWritingWithGemini,
+  generateProjectOutlineWithGemini,
 } from './shared/geminiDiscover.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -153,6 +154,20 @@ async function startServer() {
       return res.status(err?.status || 500).json({
         success: false,
         error: err?.message || 'Gagal memproses pendamping AI.',
+      });
+    }
+  });
+
+  // 6. AI PROJECT OUTLINE GENERATOR ENDPOINT
+  app.post('/api/ai/project-outline', async (req: Request, res: Response) => {
+    try {
+      const payload = await generateProjectOutlineWithGemini(process.env.GEMINI_API_KEY, req.body);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('Error in /api/ai/project-outline:', err);
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.message || 'Gagal menyusun kerangka project.',
       });
     }
   });

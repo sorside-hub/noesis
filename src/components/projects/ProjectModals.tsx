@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { Note, Fragment, Project, ProjectStatus } from '../../types';
 import { cleanTextForEmbedding } from '../../lib/cloudflareEmbedding';
+import { formatProjectDeadline } from '../../lib/projectMaster';
 import {
   X,
   Search,
@@ -8,7 +9,9 @@ import {
   BookOpen,
   Feather,
   Sparkles,
-  Target,
+  Calendar,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 
 interface ProjectFormModalProps {
@@ -19,8 +22,6 @@ interface ProjectFormModalProps {
     title: string;
     description: string;
     status: ProjectStatus;
-    enableWordGoal: boolean;
-    targetWordCount: number;
     deadline: string;
     initialSections: string[];
   }) => void;
@@ -35,29 +36,26 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
   const [title, setTitle] = useState('');
   const [description, setDescription] = useState('');
   const [status, setStatus] = useState<ProjectStatus>('active');
-  const [enableWordGoal, setEnableWordGoal] = useState(false);
-  const [targetWordCount, setTargetWordCount] = useState(3000);
   const [deadline, setDeadline] = useState('');
   const [sectionsText, setSectionsText] = useState('');
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   useEffect(() => {
     if (!isOpen) return;
     if (editingProject) {
       setTitle(editingProject.title || '');
       setDescription(editingProject.description || '');
-      setStatus(editingProject.status || 'active');
-      setEnableWordGoal(Boolean(editingProject.enableWordGoal));
-      setTargetWordCount(editingProject.targetWordCount || 3000);
+      setStatus(editingProject.status === 'review' ? 'active' : editingProject.status || 'active');
       setDeadline(editingProject.deadline || '');
       setSectionsText('');
+      setShowAdvanced(true);
     } else {
       setTitle('');
       setDescription('');
       setStatus('active');
-      setEnableWordGoal(false);
-      setTargetWordCount(3000);
       setDeadline('');
       setSectionsText('');
+      setShowAdvanced(false);
     }
   }, [isOpen, editingProject]);
 
@@ -74,8 +72,6 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
       title: title.trim(),
       description: description.trim(),
       status,
-      enableWordGoal,
-      targetWordCount: enableWordGoal ? Math.max(100, Number(targetWordCount) || 0) : 0,
       deadline: deadline.trim(),
       initialSections,
     });
@@ -118,11 +114,11 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
               Tujuan / Ruang Lingkup (Opsional)
             </label>
             <textarea
-              rows={2}
+              rows={4}
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Pertanyaan utama, target karya, atau ringkasan tujuan project..."
-              className="w-full text-xs sm:text-sm px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] resize-none"
+              placeholder="Tuliskan pertanyaan utama, latar belakang, target karya, atau fokus yang ingin dicapai dalam project ini..."
+              className="w-full min-h-[96px] text-xs sm:text-sm px-3 py-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] leading-relaxed resize-y"
             />
           </div>
 
@@ -134,8 +130,8 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-1.5">
                 {(
                   [
+                    { id: 'draft', label: 'Draf' },
                     { id: 'active', label: 'Aktif' },
-                    { id: 'review', label: 'Meninjau' },
                     { id: 'completed', label: 'Selesai' },
                     { id: 'archived', label: 'Arsip' },
                   ] as const
@@ -157,72 +153,96 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1">
-                Target Waktu (Opsional)
-              </label>
-              <input
-                type="text"
-                value={deadline}
-                onChange={(e) => setDeadline(e.target.value)}
-                placeholder="Misal: Akhir Bulan Ini / Mei 2026"
-                className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C]"
-              />
-            </div>
-
-            <div className="flex flex-col justify-end">
+          {!editingProject && (
+            <div className="pt-0.5">
               <button
                 type="button"
-                onClick={() => setEnableWordGoal((prev) => !prev)}
-                className={`w-full px-3 py-2 rounded-xl border text-xs font-medium transition-colors flex items-center justify-between gap-2 ${
-                  enableWordGoal
-                    ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
-                    : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#6B635B] dark:text-[#A8A196]'
-                }`}
+                onClick={() => setShowAdvanced((prev) => !prev)}
+                className="text-xs font-medium text-[#6B635B] dark:text-[#A8A196] hover:text-[#9A3412] dark:hover:text-[#EA580C] flex items-center gap-1.5 transition-colors"
               >
-                <span className="flex items-center gap-1.5">
-                  <Target size={13} />
-                  <span>Target Kata (Penulis)</span>
-                </span>
-                <span className="font-mono text-[10px] uppercase">
-                  {enableWordGoal ? 'ON' : 'OFF'}
-                </span>
+                {showAdvanced ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                <span>Opsi Lanjutan (Status awal, target tanggal, &amp; bab)</span>
               </button>
-            </div>
-          </div>
-
-          {enableWordGoal && (
-            <div className="p-3 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] space-y-1.5">
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388]">
-                Target Jumlah Kata (Dihitung Otomatis dari Semua Bagian)
-              </label>
-              <input
-                type="number"
-                min={100}
-                step={100}
-                value={targetWordCount}
-                onChange={(e) => setTargetWordCount(Number(e.target.value))}
-                className="w-full text-xs px-3 py-2 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412]"
-              />
             </div>
           )}
 
-          {!editingProject && (
-            <div>
-              <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1">
-                Susunan Bagian / Bab Awal (Opsional, 1 baris per bagian)
-              </label>
-              <textarea
-                rows={3}
-                value={sectionsText}
-                onChange={(e) => setSectionsText(e.target.value)}
-                placeholder={'Pendahuluan\nArgumen Utama\nKesimpulan'}
-                className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] resize-none"
-              />
-              <p className="text-[11px] text-[#9C9388] mt-1">
-                Jika dikosongkan, project langsung dimulai dengan 1 bagian Draf Utama siap tulis.
-              </p>
+          {(editingProject || showAdvanced) && (
+            <div className="space-y-3.5 pt-1">
+              {!editingProject && (
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1.5">
+                    Tahap Awal
+                  </label>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    {(
+                      [
+                        { id: 'active', label: 'Aktif (Langsung Garap)' },
+                        { id: 'draft', label: 'Draf (Kumpulkan Ide)' },
+                      ] as const
+                    ).map((opt) => (
+                      <button
+                        key={opt.id}
+                        type="button"
+                        onClick={() => setStatus(opt.id)}
+                        className={`px-2.5 py-2 rounded-xl border text-xs font-medium transition-colors ${
+                          status === opt.id
+                            ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
+                            : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#6B635B] dark:text-[#A8A196]'
+                        }`}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388]">
+                    Target Waktu (Tanggal Selesai)
+                  </label>
+                  {deadline && (
+                    <button
+                      type="button"
+                      onClick={() => setDeadline('')}
+                      className="text-[11px] text-[#9A3412] dark:text-[#EA580C] hover:underline"
+                    >
+                      Hapus Tanggal
+                    </button>
+                  )}
+                </div>
+                <input
+                  type="date"
+                  value={/^\d{4}-\d{2}-\d{2}$/.test(deadline) ? deadline : ''}
+                  onChange={(e) => setDeadline(e.target.value)}
+                  className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C]"
+                />
+                {deadline && (
+                  <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196] mt-1.5 flex items-center gap-1.5 font-mono">
+                    <Calendar size={12} className="text-[#9A3412] dark:text-[#EA580C] shrink-0" />
+                    <span>Target: {formatProjectDeadline(deadline)}</span>
+                  </p>
+                )}
+              </div>
+
+              {!editingProject && (
+                <div>
+                  <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1">
+                    Susunan Bagian / Bab Awal (Opsional, 1 baris per bagian)
+                  </label>
+                  <textarea
+                    rows={3}
+                    value={sectionsText}
+                    onChange={(e) => setSectionsText(e.target.value)}
+                    placeholder={'Pendahuluan\nArgumen Utama\nKesimpulan'}
+                    className="w-full text-xs px-3 py-2 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C] resize-none"
+                  />
+                  <p className="text-[11px] text-[#9C9388] mt-1">
+                    Bisa dikosongkan — di dalam Studio kamu juga bisa memakai AI Susun Kerangka.
+                  </p>
+                </div>
+              )}
             </div>
           )}
 

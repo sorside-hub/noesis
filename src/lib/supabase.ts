@@ -723,9 +723,10 @@ export const deleteDiscoverConnectionsForItem = async (itemId: string): Promise<
 // ============================================================================
 
 export const normalizeProjectStatus = (status: unknown): ProjectStatus => {
-  if (status === 'review' || status === 'completed' || status === 'archived') {
+  if (status === 'draft' || status === 'completed' || status === 'archived') {
     return status;
   }
+  // Legacy 'review' maps cleanly to 'active' in the simplified workflow
   return 'active';
 };
 
@@ -823,6 +824,15 @@ export const upsertProjectToSupabase = async (
       if (isMissingRelationError(error)) {
         console.warn('Supabase projects table missing during upsert:', error.message);
         return { ok: false, tableMissing: true };
+      }
+      // Graceful fallback if user's Supabase DB still has the older projects_status_check without 'draft'
+      if (String(error.code || '') === '23514' && dbRow.status === 'draft') {
+        const { error: retryErr } = await client
+          .from('projects')
+          .upsert({ ...dbRow, status: 'active' }, { onConflict: 'id' });
+        if (!retryErr) {
+          return { ok: true };
+        }
       }
       console.warn('Supabase upsertProject error:', error.message);
       return { ok: false };

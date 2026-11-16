@@ -18,8 +18,8 @@ import {
   countProjectTotalWords,
   countWordsFromContent,
   getSortedProjectSections,
-  projectHasWrittenContent,
   sectionHasWrittenContent,
+  formatProjectDeadline,
 } from '../lib/projectMaster';
 import { cleanTextForEmbedding } from '../lib/cloudflareEmbedding';
 import { sanitizeAndNormalizeHtml } from '../lib/tiptapClipboard';
@@ -33,6 +33,7 @@ import {
   ProjectFormModal,
   LinkMaterialsModal,
 } from '../components/projects/ProjectModals';
+import { ProjectOutlineModal } from '../components/projects/ProjectOutlineModal';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
 import {
   FolderKanban,
@@ -66,15 +67,20 @@ const STATUS_META: Record<
   ProjectStatus,
   { label: string; badgeClass: string }
 > = {
+  draft: {
+    label: 'Draf',
+    badgeClass:
+      'text-[#6B635B] dark:text-[#A8A196] bg-[#F5EFEB] dark:bg-[#272422] border-[#E8E2D8] dark:border-[#332F2C]',
+  },
   active: {
     label: 'Aktif',
     badgeClass:
       'text-[#9A3412] dark:text-[#EA580C] bg-[#FED7AA]/30 dark:bg-[#431407]/50 border-[#FED7AA] dark:border-[#7C2D12]',
   },
   review: {
-    label: 'Meninjau',
+    label: 'Aktif',
     badgeClass:
-      'text-[#B45309] dark:text-[#F59E0B] bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800',
+      'text-[#9A3412] dark:text-[#EA580C] bg-[#FED7AA]/30 dark:bg-[#431407]/50 border-[#FED7AA] dark:border-[#7C2D12]',
   },
   completed: {
     label: 'Selesai',
@@ -147,8 +153,7 @@ export const ProjectsPage: React.FC = () => {
 
   // Top-level Switcher: Studio Kerja vs Katalog Karya (Master)
   const [topTab, setTopTab] = useState<'studio' | 'catalog'>('studio');
-  const [statusFilter, setStatusFilter] = useState<'all' | ProjectStatus>('all');
-  const [catalogFilter, setCatalogFilter] = useState<'all' | 'completed'>('all');
+  const [statusFilter, setStatusFilter] = useState<'draft' | 'active' | 'archived'>('active');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Detail Workspace Mode: Studio (write sections + side references) vs Master Utuh
@@ -189,6 +194,7 @@ export const ProjectsPage: React.FC = () => {
   const [showCreateModal, setShowCreateModal] = useState(false);
   const [editingProject, setEditingProject] = useState<Project | null>(null);
   const [showLinkPicker, setShowLinkPicker] = useState(false);
+  const [showOutlineModal, setShowOutlineModal] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<Project | null>(null);
   const [showStatusMenu, setShowStatusMenu] = useState(false);
 
@@ -196,6 +202,7 @@ export const ProjectsPage: React.FC = () => {
   useBackOverlay(showCreateModal, () => setShowCreateModal(false), 'projects-create-modal');
   useBackOverlay(Boolean(editingProject), () => setEditingProject(null), 'projects-edit-modal');
   useBackOverlay(showLinkPicker, () => setShowLinkPicker(false), 'projects-link-modal');
+  useBackOverlay(showOutlineModal, () => setShowOutlineModal(false), 'projects-outline-modal');
   useBackOverlay(Boolean(projectToDelete), () => setProjectToDelete(null), 'projects-delete-modal');
   useBackOverlay(showStatusMenu, () => setShowStatusMenu(false), 'projects-status-menu');
   useBackOverlay(
@@ -286,14 +293,28 @@ export const ProjectsPage: React.FC = () => {
   // Helper: live word count for project (from sections)
   const getProjectWords = (proj: Project): number => countProjectTotalWords(proj);
 
-  // Filtered Projects for Studio Kerja list
+  const studioTabCounts = useMemo(() => {
+    let draft = 0;
+    let active = 0;
+    let archived = 0;
+    for (const p of projects) {
+      if (p.status === 'draft') draft += 1;
+      else if (p.status === 'archived') archived += 1;
+      else if (p.status === 'active' || p.status === 'review') active += 1;
+    }
+    return { draft, active, archived };
+  }, [projects]);
+
+  // Filtered Projects for Studio Kerja list (Draf / Aktif / Arsip)
   const filteredStudioProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return projects.filter((p) => {
-      if (statusFilter === 'all') {
-        if (p.status === 'archived') return false;
-      } else if (p.status !== statusFilter) {
-        return false;
+      if (statusFilter === 'draft') {
+        if (p.status !== 'draft') return false;
+      } else if (statusFilter === 'archived') {
+        if (p.status !== 'archived') return false;
+      } else {
+        if (p.status !== 'active' && p.status !== 'review') return false;
       }
       if (!q) return true;
       return (
@@ -303,28 +324,20 @@ export const ProjectsPage: React.FC = () => {
     });
   }, [projects, statusFilter, searchQuery]);
 
-  // Katalog Karya Projects (projects that actually have written text in sections)
+  // Katalog Karya Projects (khusus project berstatus Selesai)
   const catalogProjects = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
     return projects
       .filter((p) => {
-        if (p.status === 'archived') return false;
-        if (!projectHasWrittenContent(p)) return false;
-        if (catalogFilter === 'completed' && p.status !== 'completed') return false;
+        if (p.status !== 'completed') return false;
         if (!q) return true;
         return (
           p.title.toLowerCase().includes(q) ||
           (p.description || '').toLowerCase().includes(q)
         );
       })
-      .sort((a, b) => {
-        // Completed works first, then newest updated
-        const aDone = a.status === 'completed' ? 1 : 0;
-        const bDone = b.status === 'completed' ? 1 : 0;
-        if (aDone !== bDone) return bDone - aDone;
-        return (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0);
-      });
-  }, [projects, catalogFilter, searchQuery]);
+      .sort((a, b) => (Date.parse(b.updatedAt || '') || 0) - (Date.parse(a.updatedAt || '') || 0));
+  }, [projects, searchQuery]);
 
   // Linked References for Active Project
   const { linkedNotes, linkedFragments } = useMemo(() => {
@@ -418,6 +431,32 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
+  const handleApplyOutline = (
+    items: { title: string; initialContent: string }[],
+    replaceEmptySections: boolean
+  ) => {
+    if (!activeProject || items.length === 0) return;
+    const now = new Date().toISOString();
+    const baseList = replaceEmptySections ? [] : [...sortedSections];
+    const startOrder = baseList.length;
+
+    const newSections: ProjectSection[] = items.map((item, idx) => ({
+      id: `sec-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      title: item.title,
+      content: item.initialContent || '<p></p>',
+      status: 'draft',
+      order: startOrder + idx,
+      updatedAt: now,
+    }));
+
+    const combined = [...baseList, ...newSections];
+    updateProject(activeProject.id, { sections: combined });
+    if (newSections[0]) {
+      setActiveSectionId(newSections[0].id);
+    }
+    showTempNotice(`${newSections.length} bagian kerangka diterapkan.`);
+  };
+
   const handleInsertMaterialToActiveSection = (selected: ProjectSelectedMaterial) => {
     if (!activeProject) return;
     const htmlToInsert = buildInsertHtmlFromMaterial(selected);
@@ -480,10 +519,6 @@ export const ProjectsPage: React.FC = () => {
     const doneSections = sortedSections.filter((s) => s.status === 'done').length;
     const totalLinkedCount = linkedNotes.length + linkedFragments.length;
     const totalWords = getProjectWords(activeProject);
-    const wordPercent =
-      activeProject.enableWordGoal && activeProject.targetWordCount > 0
-        ? Math.min(100, Math.round((totalWords / activeProject.targetWordCount) * 100))
-        : 0;
 
     // Legacy Milestone Migration Helper Card (only when a legacy project has milestones & 0 sections)
     const renderLegacyMilestoneBanner = () => {
@@ -515,9 +550,20 @@ export const ProjectsPage: React.FC = () => {
           <h3 className="text-[11px] font-mono uppercase tracking-wider text-[#9C9388] dark:text-[#736C62]">
             Susunan Bagian ({doneSections}/{totalSections})
           </h3>
-          <span className="text-[11px] font-mono font-medium text-[#9A3412] dark:text-[#EA580C]">
-            {activeProject.progress}%
-          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setShowOutlineModal(true)}
+              className="px-2 py-1 rounded-lg border border-[#9A3412]/30 dark:border-[#EA580C]/35 bg-[#FAF7F2] dark:bg-[#272422] text-[11px] font-medium text-[#9A3412] dark:text-[#EA580C] hover:bg-[#9A3412]/10 dark:hover:bg-[#EA580C]/15 transition-colors flex items-center gap-1"
+              title="Susun kerangka bagian dengan AI berdasarkan tujuan & bahan tertaut"
+            >
+              <Sparkles size={11} />
+              <span>AI Kerangka</span>
+            </button>
+            <span className="text-[11px] font-mono font-medium text-[#9A3412] dark:text-[#EA580C]">
+              {activeProject.progress}%
+            </span>
+          </div>
         </div>
 
         {/* Inline Add Section */}
@@ -839,8 +885,8 @@ export const ProjectsPage: React.FC = () => {
                     <div className="absolute left-0 top-full mt-1 w-36 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-lg py-1 z-40">
                       {(
                         [
+                          { id: 'draft', label: 'Draf' },
                           { id: 'active', label: 'Aktif' },
-                          { id: 'review', label: 'Meninjau' },
                           { id: 'completed', label: 'Selesai' },
                           { id: 'archived', label: 'Arsip' },
                         ] as const
@@ -868,7 +914,7 @@ export const ProjectsPage: React.FC = () => {
                 {activeProject.deadline && (
                   <span className="hidden sm:inline-flex items-center gap-1 text-[11px] font-mono text-[#9C9388] truncate">
                     <Calendar size={11} />
-                    <span>{activeProject.deadline}</span>
+                    <span>{formatProjectDeadline(activeProject.deadline)}</span>
                   </span>
                 )}
               </div>
@@ -943,17 +989,11 @@ export const ProjectsPage: React.FC = () => {
                 {activeProject.deadline && (
                   <span className="sm:hidden inline-flex items-center gap-1 text-[#9C9388]">
                     <Calendar size={11} />
-                    <span>{activeProject.deadline}</span>
+                    <span>{formatProjectDeadline(activeProject.deadline)}</span>
                   </span>
                 )}
                 <span className="inline-flex items-center gap-1 text-[#9A3412] dark:text-[#EA580C]">
-                  <Target size={11} />
-                  <span>
-                    {totalWords.toLocaleString()}
-                    {activeProject.enableWordGoal && activeProject.targetWordCount > 0
-                      ? ` / ${activeProject.targetWordCount.toLocaleString()} kata`
-                      : ' kata'}
-                  </span>
+                  <span>{totalWords.toLocaleString()} kata</span>
                 </span>
                 <span>Progres {activeProject.progress}%</span>
               </div>
@@ -1026,7 +1066,7 @@ export const ProjectsPage: React.FC = () => {
                         Progres Bagian
                       </span>
                       <span className="font-mono font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                        {activeProject.progress}%
+                        {doneSections}/{totalSections} ({activeProject.progress}%)
                       </span>
                     </div>
                     <div className="w-full bg-[#F5EFEB] dark:bg-[#272422] h-2 rounded-full overflow-hidden">
@@ -1035,23 +1075,6 @@ export const ProjectsPage: React.FC = () => {
                         style={{ width: `${activeProject.progress}%` }}
                       />
                     </div>
-                    {activeProject.enableWordGoal && activeProject.targetWordCount > 0 && (
-                      <div className="pt-1 space-y-1">
-                        <div className="flex items-center justify-between text-[11px] font-mono text-[#6B635B] dark:text-[#A8A196]">
-                          <span>Target Kata</span>
-                          <span>
-                            {totalWords.toLocaleString()} /{' '}
-                            {activeProject.targetWordCount.toLocaleString()} ({wordPercent}%)
-                          </span>
-                        </div>
-                        <div className="w-full bg-[#F5EFEB] dark:bg-[#272422] h-1.5 rounded-full overflow-hidden">
-                          <div
-                            className="bg-emerald-600 dark:bg-emerald-500 h-full transition-all duration-300"
-                            style={{ width: `${wordPercent}%` }}
-                          />
-                        </div>
-                      </div>
-                    )}
                   </div>
 
                   {renderSectionsList('desktop')}
@@ -1193,21 +1216,18 @@ export const ProjectsPage: React.FC = () => {
                 <>
                   {/* Compact Progress Card */}
                   <div className="bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl p-3 space-y-1.5">
+                    <div className="flex items-center justify-between text-[11px] font-mono text-[#6B635B] dark:text-[#A8A196]">
+                      <span>Progres Bagian</span>
+                      <span className="font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+                        {doneSections}/{totalSections} ({activeProject.progress}%)
+                      </span>
+                    </div>
                     <div className="w-full bg-[#F5EFEB] dark:bg-[#272422] h-2 rounded-full overflow-hidden">
                       <div
                         className="bg-[#9A3412] dark:bg-[#EA580C] h-full transition-all duration-300"
                         style={{ width: `${activeProject.progress}%` }}
                       />
                     </div>
-                    {activeProject.enableWordGoal && activeProject.targetWordCount > 0 && (
-                      <div className="flex items-center justify-between text-[11px] font-mono text-[#6B635B] dark:text-[#A8A196]">
-                        <span>Target Kata</span>
-                        <span>
-                          {totalWords.toLocaleString()} /{' '}
-                          {activeProject.targetWordCount.toLocaleString()} ({wordPercent}%)
-                        </span>
-                      </div>
-                    )}
                   </div>
 
                   {renderSectionsList('mobile')}
@@ -1319,8 +1339,6 @@ export const ProjectsPage: React.FC = () => {
               title: data.title,
               description: data.description,
               status: data.status,
-              enableWordGoal: data.enableWordGoal,
-              targetWordCount: data.targetWordCount,
               deadline: data.deadline || undefined,
             });
             setEditingProject(null);
@@ -1340,6 +1358,16 @@ export const ProjectsPage: React.FC = () => {
               linkItemToProject(activeProject.id, kind, itemId);
             }
           }}
+        />
+
+        <ProjectOutlineModal
+          isOpen={showOutlineModal}
+          project={activeProject}
+          sections={sortedSections}
+          linkedNotes={linkedNotes}
+          linkedFragments={linkedFragments}
+          onClose={() => setShowOutlineModal(false)}
+          onApplyOutline={handleApplyOutline}
         />
 
         <DeleteConfirmModal
@@ -1363,9 +1391,7 @@ export const ProjectsPage: React.FC = () => {
   // ============================================================================
   // VIEW A: TOP-LEVEL LIST (STUDIO KERJA + KATALOG KARYA)
   // ============================================================================
-  const totalCatalogCount = projects.filter(
-    (p) => p.status !== 'archived' && projectHasWrittenContent(p)
-  ).length;
+  const totalCatalogCount = projects.filter((p) => p.status === 'completed').length;
 
   return (
     <div
@@ -1442,53 +1468,28 @@ export const ProjectsPage: React.FC = () => {
           )}
         </div>
 
-        {/* Sub-filters */}
+        {/* Sub-filters: 3 tab bersih untuk Studio Kerja (Draf, Aktif, Arsip) */}
         {projects.length > 0 && topTab === 'studio' && (
           <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
             {(
               [
-                { id: 'all', label: 'Aktif & Berjalan' },
-                { id: 'active', label: 'Aktif' },
-                { id: 'review', label: 'Meninjau' },
-                { id: 'completed', label: 'Selesai' },
-                { id: 'archived', label: 'Arsip' },
+                { id: 'draft', label: 'Draf', count: studioTabCounts.draft },
+                { id: 'active', label: 'Aktif', count: studioTabCounts.active },
+                { id: 'archived', label: 'Arsip', count: studioTabCounts.archived },
               ] as const
             ).map((tab) => (
               <button
                 key={tab.id}
                 type="button"
                 onClick={() => setStatusFilter(tab.id)}
-                className={`px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-colors whitespace-nowrap ${
+                className={`px-3 py-1.5 rounded-xl text-xs font-medium border transition-colors whitespace-nowrap flex items-center gap-1.5 ${
                   statusFilter === tab.id
                     ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
                     : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-[#6B635B] dark:text-[#A8A196]'
                 }`}
               >
-                {tab.label}
-              </button>
-            ))}
-          </div>
-        )}
-
-        {projects.length > 0 && topTab === 'catalog' && (
-          <div className="flex items-center gap-1.5 overflow-x-auto pb-0.5">
-            {(
-              [
-                { id: 'all', label: 'Semua Karya Tertulis' },
-                { id: 'completed', label: 'Hanya Karya Selesai' },
-              ] as const
-            ).map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setCatalogFilter(tab.id)}
-                className={`px-2.5 py-1.5 rounded-xl text-xs font-medium border transition-colors whitespace-nowrap ${
-                  catalogFilter === tab.id
-                    ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
-                    : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#1E1C1A] text-[#6B635B] dark:text-[#A8A196]'
-                }`}
-              >
-                {tab.label}
+                <span>{tab.label}</span>
+                <span className="text-[10px] font-mono opacity-75">{tab.count}</span>
               </button>
             ))}
           </div>
@@ -1502,10 +1503,10 @@ export const ProjectsPage: React.FC = () => {
                 <Library size={20} />
               </div>
               <h2 className="font-serif text-lg sm:text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Katalog Karya Masih Kosong
+                Belum Ada Karya Selesai
               </h2>
               <p className="text-xs sm:text-sm text-[#6B635B] dark:text-[#A8A196] max-w-md mx-auto leading-relaxed">
-                Tulisan yang sudah mulai kamu susun di bagian-bagian project akan otomatis tampil di sini sebagai naskah Master Utuh siap baca.
+                Tandai project sebagai <strong>Selesai</strong> di Studio Kerja jika naskahmu sudah rampung — karya final akan otomatis tersusun di sini.
               </p>
             </div>
           ) : (
@@ -1646,7 +1647,7 @@ export const ProjectsPage: React.FC = () => {
                       {proj.deadline && (
                         <span className="text-[11px] text-[#9C9388] font-mono flex items-center gap-1 truncate">
                           <Calendar size={11} />
-                          <span>{proj.deadline}</span>
+                          <span>{formatProjectDeadline(proj.deadline)}</span>
                         </span>
                       )}
                     </div>
@@ -1690,10 +1691,7 @@ export const ProjectsPage: React.FC = () => {
                         {noteCount} Catatan{fragCount > 0 ? ` · ${fragCount} Fragments` : ''}
                       </span>
                       <span className="text-[#9A3412] dark:text-[#EA580C]">
-                        {totalWords.toLocaleString()}
-                        {proj.enableWordGoal && proj.targetWordCount > 0
-                          ? ` / ${proj.targetWordCount.toLocaleString()} kata`
-                          : ' kata'}
+                        {totalWords.toLocaleString()} kata
                       </span>
                     </div>
                   </div>
@@ -1710,14 +1708,15 @@ export const ProjectsPage: React.FC = () => {
         editingProject={null}
         onClose={() => setShowCreateModal(false)}
         onSubmit={(data) => {
+          const initialStatus = data.status === 'draft' ? 'draft' : 'active';
           const newId = createProject({
             title: data.title,
             description: data.description,
-            enableWordGoal: data.enableWordGoal,
-            targetWordCount: data.targetWordCount,
+            status: initialStatus,
             deadline: data.deadline,
             initialSections: data.initialSections,
           });
+          setStatusFilter(initialStatus);
           setShowCreateModal(false);
           openProjectInMode(newId, 'studio', 'studio');
         }}

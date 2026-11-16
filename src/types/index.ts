@@ -50,7 +50,7 @@ export interface Fragment {
 
 export type Relic = Fragment;
 
-export type ProjectStatus = 'active' | 'review' | 'completed' | 'archived';
+export type ProjectStatus = 'draft' | 'active' | 'review' | 'completed' | 'archived';
 
 export interface Milestone {
   id: string;
@@ -221,6 +221,20 @@ export interface WritingAssistResult {
   plainText: string;
   summaryNote?: string;
   isAdvisoryOnly?: boolean;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
+}
+
+export interface ProjectOutlineSectionSuggestion {
+  title: string;
+  summary: string;
+  materialRefs: string[];
+}
+
+export interface ProjectOutlineResult {
+  strategyNote: string;
+  sections: ProjectOutlineSectionSuggestion[];
   modelUsed?: string;
   fallbackUsed?: boolean;
   aiTrace?: AiExecutionTrace;

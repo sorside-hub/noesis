@@ -19,7 +19,7 @@ import {
   Link as LinkIcon,
   Image as ImageIcon,
   Star,
-  Share2,
+  Copy,
   MoreVertical,
   ChevronLeft,
   Trash2,
@@ -61,7 +61,7 @@ import {
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
 import { useBackOverlay } from '../hooks/useBackOverlay';
 import { useScrollRestoration } from '../hooks/useScrollRestoration';
-import { createTiptapClipboardProps } from '../lib/tiptapClipboard';
+import { createTiptapClipboardProps, copyFormattedNoteToClipboard } from '../lib/tiptapClipboard';
 
 interface TiptapEditorProps {
   isFullScreen?: boolean;
@@ -432,11 +432,18 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setShowImageDialog(false);
   };
 
-  const handleShareNote = () => {
-    navigator.clipboard?.writeText(window.location.href);
-    setCopiedNotification(true);
-    setTimeout(() => setCopiedNotification(false), 2200);
+  const handleCopyNote = async () => {
     setShowActionMenu(false);
+    const currentHtml = editor ? editor.getHTML() : activeNote?.content || '';
+    const copied = await copyFormattedNoteToClipboard({
+      title: title || activeNote?.title || '',
+      html: currentHtml,
+      doc: editor?.state.doc ?? null,
+    });
+    if (copied) {
+      setCopiedNotification(true);
+      setTimeout(() => setCopiedNotification(false), 2200);
+    }
   };
 
   const workspaceTags = useMemo(() => collectWorkspaceTags(notes, fragments, 100), [notes, fragments]);
@@ -795,11 +802,11 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                   </button>
 
                   <button
-                    onClick={handleShareNote}
+                    onClick={handleCopyNote}
                     className="w-full px-3 py-1.5 text-xs flex items-center gap-2 text-[#6B635B] dark:text-[#A8A196] hover:bg-[#FAF7F2] dark:hover:bg-[#272422] text-left transition-colors"
                   >
-                    <Share2 size={14} />
-                    <span>Share / Copy Link</span>
+                    <Copy size={14} />
+                    <span>Copy Note</span>
                   </button>
 
                   <button
@@ -842,10 +849,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           </div>
         </div>
 
-        {/* Link Copied Toast */}
+        {/* Note Copied Toast */}
         {copiedNotification && (
-          <div className="absolute top-14 right-6 z-30 text-xs bg-[#221F1D] text-white px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in duration-200">
-            Note link copied to clipboard
+          <div className="absolute top-14 right-6 z-30 text-xs bg-[#221F1D] dark:bg-[#EDE8E1] text-white dark:text-[#151413] px-3 py-1.5 rounded-lg shadow-lg animate-in fade-in duration-200">
+            Note copied to clipboard
           </div>
         )}
 

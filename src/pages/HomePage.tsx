@@ -30,6 +30,7 @@ import {
 import {
   countProjectTotalWords,
   getSortedProjectSections,
+  formatProjectDeadline,
 } from '../lib/projectMaster';
 
 type SparkEntry =
@@ -767,7 +768,7 @@ export const HomePage: React.FC = () => {
                         const secList = getSortedProjectSections(proj);
                         const doneCount = secList.filter((s) => s.status === 'done').length;
                         const words = countProjectTotalWords(proj);
-                        const isReview = proj.status === 'review';
+                        const isDraft = proj.status === 'draft';
 
                         return (
                           <div
@@ -778,18 +779,18 @@ export const HomePage: React.FC = () => {
                             <div className="flex items-center justify-between gap-2 text-[10px] font-mono text-[#9C9388] dark:text-[#736C62] mb-1">
                               <span
                                 className={`inline-flex items-center gap-1 uppercase tracking-wider font-semibold ${
-                                  isReview
-                                    ? 'text-[#B45309] dark:text-[#F59E0B]'
+                                  isDraft
+                                    ? 'text-[#6B635B] dark:text-[#A8A196]'
                                     : 'text-[#9A3412] dark:text-[#EA580C]'
                                 }`}
                               >
-                                {isReview ? 'Meninjau' : 'Aktif'}
+                                {isDraft ? 'Draf' : 'Aktif'}
                               </span>
                               <div className="flex items-center gap-2 shrink-0">
                                 {proj.deadline && (
                                   <span className="inline-flex items-center gap-1">
                                     <Calendar size={10} />
-                                    <span>{proj.deadline}</span>
+                                    <span>{formatProjectDeadline(proj.deadline)}</span>
                                   </span>
                                 )}
                                 <span>{proj.progress}%</span>

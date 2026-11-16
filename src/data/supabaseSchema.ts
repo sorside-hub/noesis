@@ -69,7 +69,7 @@ CREATE TABLE IF NOT EXISTS public.projects (
   user_id UUID REFERENCES auth.users(id) ON DELETE CASCADE DEFAULT auth.uid(),
   title TEXT NOT NULL DEFAULT '',
   description TEXT DEFAULT '',
-  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'review', 'completed', 'archived')),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('draft', 'active', 'review', 'completed', 'archived')),
   progress INTEGER DEFAULT 0,
   enable_word_goal BOOLEAN DEFAULT false,
   target_word_count INTEGER DEFAULT 0,
@@ -120,6 +120,27 @@ ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS user_id UUID REFERENCES aut
 ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS enable_word_goal BOOLEAN DEFAULT false;
 ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS fragment_ids TEXT[] DEFAULT '{}';
 ALTER TABLE public.projects ADD COLUMN IF NOT EXISTS sections JSONB DEFAULT '[]'::jsonb;
+
+-- Perbarui CHECK constraint pada projects.status agar mendukung status 'draft'
+DO $$
+DECLARE
+  c_name TEXT;
+BEGIN
+  FOR c_name IN
+    SELECT con.conname
+    FROM pg_constraint con
+    JOIN pg_class rel ON rel.oid = con.conrelid
+    JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+    WHERE nsp.nspname = 'public'
+      AND rel.relname = 'projects'
+      AND con.contype = 'c'
+      AND pg_get_constraintdef(con.oid) LIKE '%status%'
+  LOOP
+    EXECUTE format('ALTER TABLE public.projects DROP CONSTRAINT IF EXISTS %I', c_name);
+  END LOOP;
+END $$;
+ALTER TABLE public.projects
+  ADD CONSTRAINT projects_status_check CHECK (status IN ('draft', 'active', 'review', 'completed', 'archived'));
 
 CREATE INDEX IF NOT EXISTS notes_user_id_idx ON public.notes (user_id);
 CREATE INDEX IF NOT EXISTS fragments_user_id_idx ON public.fragments (user_id);

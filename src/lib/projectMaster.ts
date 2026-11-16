@@ -41,6 +41,26 @@ export const computeProjectProgress = (
   return 0;
 };
 
+export const formatProjectDeadline = (dateStr?: string): string => {
+  if (!dateStr || !dateStr.trim()) return '';
+  const clean = dateStr.trim();
+  const match = clean.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (match) {
+    const year = Number(match[1]);
+    const month = Number(match[2]) - 1;
+    const day = Number(match[3]);
+    const d = new Date(year, month, day);
+    if (!isNaN(d.getTime())) {
+      return d.toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      });
+    }
+  }
+  return clean;
+};
+
 const escapeHtml = (text: string): string =>
   text
     .replace(/&/g, '&amp;')

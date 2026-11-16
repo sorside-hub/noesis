@@ -207,6 +207,7 @@ interface NoesisContextType {
   createProject: (params: {
     title: string;
     description?: string;
+    status?: ProjectStatus;
     enableWordGoal?: boolean;
     targetWordCount?: number;
     deadline?: string;
@@ -3205,6 +3206,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const createProject = ({
     title,
     description = '',
+    status = 'active',
     enableWordGoal = false,
     targetWordCount = 0,
     deadline,
@@ -3215,6 +3217,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   }: {
     title: string;
     description?: string;
+    status?: ProjectStatus;
     enableWordGoal?: boolean;
     targetWordCount?: number;
     deadline?: string;
@@ -3263,7 +3266,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       id: newId,
       title: title.trim() || 'Project Baru',
       description: description.trim(),
-      status: 'active',
+      status: normalizeProjectStatus(status),
       progress: 0,
       enableWordGoal: Boolean(enableWordGoal),
       targetWordCount: enableWordGoal ? Math.max(0, Number(targetWordCount) || 0) : 0,

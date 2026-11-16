@@ -986,4 +986,173 @@ ATURAN FORMAT & GAYA WAJIB:
   };
 }
 
+export async function generateProjectOutlineWithGemini(
+  apiKey: string | undefined,
+  body: {
+    projectTitle?: string;
+    projectDescription?: string;
+    existingSections?: { title?: string; hasContent?: boolean }[];
+    materials?: {
+      kind?: 'note' | 'fragment';
+      title?: string;
+      type?: string;
+      excerpt?: string;
+      content?: string;
+      tags?: string[];
+    }[];
+    userGuidance?: string;
+  }
+) {
+  const {
+    projectTitle = '',
+    projectDescription = '',
+    existingSections = [],
+    materials = [],
+    userGuidance = '',
+  } = body || {};
+
+  const cleanTitle = String(projectTitle || '').trim();
+  const cleanDescription = String(projectDescription || '').trim();
+  const cleanGuidance = String(userGuidance || '').trim();
+  const safeMaterials = Array.isArray(materials) ? materials.slice(0, 15) : [];
+
+  if (!cleanTitle && !cleanDescription && safeMaterials.length === 0 && !cleanGuidance) {
+    throw new DiscoverApiError(
+      'Isi nama/tujuan project atau tautkan minimal 1 bahan terlebih dahulu agar AI bisa menyusun kerangka.',
+      400
+    );
+  }
+
+  const materialsBlock =
+    safeMaterials.length > 0
+      ? safeMaterials
+          .map((m, idx) => {
+            const labelKind = m.kind === 'fragment' ? 'Fragment' : 'Catatan';
+            const cleanBody = stripHtml(m.content || m.excerpt || '').slice(0, 1200).trim();
+            const tagsLine =
+              Array.isArray(m.tags) && m.tags.length > 0
+                ? `Tags: ${m.tags.slice(0, 6).map((t) => `#${t}`).join(' ')}`
+                : '';
+            return `[Bahan ${idx + 1}] (${labelKind} · ${m.type || 'umum'}) Judul: "${
+              (m.title || 'Tanpa Judul').trim()
+            }"
+${tagsLine ? `${tagsLine}\n` : ''}Isi ringkas: ${cleanBody || '(kosong)'}`;
+          })
+          .join('\n\n')
+      : '(Belum ada catatan atau fragment tertaut — susun kerangka berdasarkan judul, tujuan, dan arahan pengguna).';
+
+  const existingList = (Array.isArray(existingSections) ? existingSections : [])
+    .map((s) => String(s?.title || '').trim())
+    .filter(Boolean);
+
+  const existingBlock =
+    existingList.length > 0
+      ? `BAGIAN YANG SUDAH ADA SAAT INI (hindari pengulangan persis jika akan ditambahkan):\n- ${existingList.join('\n- ')}`
+      : '(Belum ada bagian tertulis)';
+
+  const prompt = `Susun kerangka struktur bagian/bab yang runtut, tajam, dan siap ditulis untuk Project Noesis berikut.
+
+IDENTITAS PROJECT:
+- Judul Project: ${cleanTitle || 'Tanpa Judul'}
+- Tujuan / Ruang Lingkup: ${cleanDescription || '(Belum diisi)'}
+${cleanGuidance ? `- Arahan Tambahan Pengguna: ${cleanGuidance}\n` : ''}
+${existingBlock}
+
+BAHAN REFERENSI TERTAUT (${safeMaterials.length} item):
+${materialsBlock}
+
+ATURAN PENYUSUNAN KERANGKA:
+1. Buat 3 sampai 7 bagian/bab yang mengalir logis dari pembuka/konteks, pengembangan inti argumen atau pembahasan, hingga penutup/sintesis.
+2. Gunakan Bahasa Indonesia editorial yang jernih dan spesifik (hindari judul klise yang terlalu generik kalau konteksnya spesifik).
+3. Untuk setiap bagian:
+   - "title": Judul bagian yang ringkas dan jelas (maks 8 kata).
+   - "summary": 1 kalimat padat menjelaskan fokus/poin utama yang perlu ditulis di bagian ini.
+   - "materialRefs": Daftar judul bahan tertaut (persis dari daftar di atas) yang paling relevan untuk dipakai di bagian ini (kosongkan array [] jika tidak ada bahan tertaut).
+4. "strategyNote": 1 kalimat ringkas menjelaskan alur logika kerangka ini secara keseluruhan.`;
+
+  const { data: result, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
+    apiKey,
+    async (ai, model, isFallback) => {
+      const response = await ai.models.generateContent({
+        model,
+        contents: prompt,
+        config: {
+          systemInstruction:
+            'Kamu adalah arsitek struktur tulisan di Noesis. Tugasmu merancang kerangka bab/bagian yang runtut, logis, dan terhubung erat dengan bahan catatan pengguna dalam Bahasa Indonesia.',
+          responseMimeType: 'application/json',
+          thinkingConfig: {
+            thinkingLevel: isFallback ? ThinkingLevel.MINIMAL : ThinkingLevel.MEDIUM,
+          },
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              strategyNote: {
+                type: Type.STRING,
+                description: 'Penjelasan 1 kalimat tentang logika alur kerangka.',
+              },
+              sections: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    title: {
+                      type: Type.STRING,
+                      description: 'Judul bagian/bab yang singkat dan tajam.',
+                    },
+                    summary: {
+                      type: Type.STRING,
+                      description: '1 kalimat fokus bahasan untuk bagian ini.',
+                    },
+                    materialRefs: {
+                      type: Type.ARRAY,
+                      items: { type: Type.STRING },
+                      description: 'Judul bahan tertaut yang relevan untuk bagian ini.',
+                    },
+                  },
+                  required: ['title', 'summary', 'materialRefs'],
+                },
+              },
+            },
+            required: ['strategyNote', 'sections'],
+          },
+        },
+      });
+
+      const text = response.text?.trim();
+      if (!text) {
+        throw new Error('Model mengembalikan respons kosong.');
+      }
+      return JSON.parse(text);
+    }
+  );
+
+  const normalizedSections = Array.isArray(result?.sections)
+    ? result.sections
+        .map((s: any) => ({
+          title: String(s?.title || '').trim(),
+          summary: String(s?.summary || '').trim(),
+          materialRefs: Array.isArray(s?.materialRefs)
+            ? s.materialRefs.map((r: any) => String(r || '').trim()).filter(Boolean).slice(0, 5)
+            : [],
+        }))
+        .filter((s: { title: string }) => s.title.length > 0)
+        .slice(0, 8)
+    : [];
+
+  if (normalizedSections.length === 0) {
+    throw new DiscoverApiError('AI belum berhasil menghasilkan kerangka bagian. Coba ulangi.', 502);
+  }
+
+  return {
+    success: true,
+    modelUsed,
+    fallbackUsed,
+    aiTrace,
+    result: {
+      strategyNote: String(result?.strategyNote || '').trim(),
+      sections: normalizedSections,
+    },
+  };
+}
+
 

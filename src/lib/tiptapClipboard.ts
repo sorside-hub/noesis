@@ -275,7 +275,12 @@ const serializeBlockNode = (node: ProseMirrorNode, listDepth = 0): string => {
   }
 
   if (typeName === 'blockquote') {
-    return serializeFragmentBlocks(node.content);
+    const inner = serializeFragmentBlocks(node.content);
+    if (!inner) return '';
+    return inner
+      .split('\n')
+      .map((line) => (line.trim() ? `> ${line}` : '>'))
+      .join('\n');
   }
 
   if (typeName === 'horizontalRule') {
@@ -319,6 +324,156 @@ const serializeFragmentBlocks = (fragment: ProseMirrorFragment): string => {
  */
 export const serializeSliceToCleanPlainText = (slice: Slice): string => {
   return serializeFragmentBlocks(slice.content);
+};
+
+const escapeHtmlText = (text: string): string =>
+  text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+/**
+ * Strips editor-specific classes/styles, dangerous nodes, and empty spacer paragraphs
+ * so copied HTML pastes cleanly into Google Docs, Word, Notion, or Email without dark-mode or spacing artifacts.
+ */
+const buildCleanClipboardHtml = (title: string, bodyHtml: string): string => {
+  const cleanTitle = title.trim();
+  let cleanBodyHtml = '';
+
+  if (bodyHtml && bodyHtml.trim()) {
+    if (typeof window !== 'undefined' && typeof window.DOMParser !== 'undefined') {
+      const doc = new window.DOMParser().parseFromString(bodyHtml, 'text/html');
+      const body = doc.body;
+      if (body) {
+        body.querySelectorAll(BLOCKED_TAGS_SELECTOR).forEach((el) => el.remove());
+
+        // Remove empty spacer blocks
+        body.querySelectorAll('p, div').forEach((block) => {
+          if (block.querySelector('img, figure, hr, pre, ul, ol, blockquote, table')) return;
+          const text = (block.textContent || '').replace(/\u00a0/g, '').trim();
+          if (text.length === 0) {
+            block.remove();
+          }
+        });
+
+        // Strip Tailwind classes, inline styles, and event handlers
+        body.querySelectorAll('*').forEach((el) => {
+          for (const attr of Array.from(el.attributes)) {
+            const name = attr.name.toLowerCase();
+            if (name === 'class' || name === 'style' || name.startsWith('on')) {
+              el.removeAttribute(attr.name);
+            } else if (name === 'href' || name === 'src') {
+              const val = attr.value.trim().toLowerCase();
+              if (val.startsWith('javascript:') || val.startsWith('vbscript:')) {
+                el.removeAttribute(attr.name);
+              }
+            }
+          }
+        });
+
+        cleanBodyHtml = body.innerHTML.trim();
+      }
+    } else {
+      cleanBodyHtml = bodyHtml.trim();
+    }
+  }
+
+  const parts: string[] = [];
+  if (cleanTitle) {
+    parts.push(`<h1>${escapeHtmlText(cleanTitle)}</h1>`);
+  }
+  if (cleanBodyHtml) {
+    parts.push(cleanBodyHtml);
+  }
+  return parts.join('\n');
+};
+
+/**
+ * Fallback plain-text converter from HTML when a ProseMirror doc instance is unavailable.
+ */
+const htmlToFallbackPlainText = (rawHtml: string): string => {
+  if (!rawHtml || !rawHtml.trim()) return '';
+  if (typeof window === 'undefined' || typeof window.DOMParser === 'undefined') {
+    return rawHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+  }
+  const doc = new window.DOMParser().parseFromString(rawHtml, 'text/html');
+  return (doc.body?.innerText || doc.body?.textContent || '')
+    .replace(/\r\n?/g, '\n')
+    .replace(/\n[ \t]*\n(?:[ \t]*\n)+/g, '\n\n')
+    .trim();
+};
+
+/**
+ * Copies a formatted Note (Title + Body only) to the clipboard using dual-format
+ * (text/plain + clean text/html) so pasting works cleanly in both plain-text apps
+ * (WhatsApp, Telegram, Notepad) and rich-text apps (Google Docs, Word, Gmail, Notion).
+ */
+export const copyFormattedNoteToClipboard = async ({
+  title,
+  html,
+  doc,
+}: {
+  title: string;
+  html: string;
+  doc?: ProseMirrorNode | null;
+}): Promise<boolean> => {
+  const cleanTitle = title.trim();
+  const bodyPlain = doc
+    ? serializeFragmentBlocks(doc.content).trim()
+    : htmlToFallbackPlainText(html);
+
+  const plainText = [cleanTitle, bodyPlain].filter(Boolean).join('\n\n');
+  const cleanHtml = buildCleanClipboardHtml(cleanTitle, html);
+
+  try {
+    if (
+      typeof navigator !== 'undefined' &&
+      navigator.clipboard &&
+      typeof navigator.clipboard.write === 'function' &&
+      typeof ClipboardItem !== 'undefined'
+    ) {
+      const itemData: Record<string, Blob> = {
+        'text/plain': new Blob([plainText], { type: 'text/plain' }),
+      };
+      if (cleanHtml) {
+        itemData['text/html'] = new Blob([cleanHtml], { type: 'text/html' });
+      }
+      await navigator.clipboard.write([new ClipboardItem(itemData)]);
+      return true;
+    }
+  } catch {
+    // Fall through to writeText / execCommand fallbacks
+  }
+
+  try {
+    if (typeof navigator !== 'undefined' && navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(plainText);
+      return true;
+    }
+  } catch {
+    // Fall through to textarea execCommand fallback
+  }
+
+  if (typeof document !== 'undefined') {
+    const textarea = document.createElement('textarea');
+    textarea.value = plainText;
+    textarea.setAttribute('readonly', '');
+    textarea.style.position = 'fixed';
+    textarea.style.top = '-9999px';
+    textarea.style.opacity = '0';
+    document.body.appendChild(textarea);
+    textarea.select();
+    try {
+      const ok = document.execCommand('copy');
+      return ok;
+    } finally {
+      document.body.removeChild(textarea);
+    }
+  }
+
+  return false;
 };
 
 /**

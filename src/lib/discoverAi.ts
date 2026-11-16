@@ -12,6 +12,7 @@ import {
   WritingAssistMode,
   WritingAssistAction,
   WritingAssistResult,
+  ProjectOutlineResult,
 } from '../types';
 import { cleanTextForEmbedding } from './cloudflareEmbedding';
 import { VectorMapResult } from './supabase';
@@ -736,6 +737,39 @@ export const requestWritingAssist = async (payload: {
   const json = await res.json();
   if (!res.ok || !json.success) {
     throw new Error(json.error || 'Gagal memproses pendamping AI.');
+  }
+
+  return {
+    ...json.result,
+    modelUsed: json.modelUsed,
+    fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
+  };
+};
+
+export const requestProjectOutline = async (payload: {
+  projectTitle: string;
+  projectDescription?: string;
+  existingSections?: { title: string; hasContent: boolean }[];
+  materials?: {
+    kind: 'note' | 'fragment';
+    title: string;
+    type: string;
+    excerpt: string;
+    content: string;
+    tags: string[];
+  }[];
+  userGuidance?: string;
+}): Promise<ProjectOutlineResult> => {
+  const res = await fetch('/api/ai/project-outline', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  const json = await res.json();
+  if (!res.ok || !json.success) {
+    throw new Error(json.error || 'Gagal menyusun kerangka project.');
   }
 
   return {
