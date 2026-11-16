@@ -587,16 +587,11 @@ export const requestSynthesizeDocument = async (payload: {
     tags?: string[];
   };
 }): Promise<SynthesisResult> => {
-  const res = await fetch('/api/discover/synthesize', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new Error(json.error || 'Gagal menyintesis dokumen.');
-  }
+  const json = await postAiJson<any>(
+    '/api/discover/synthesize',
+    payload,
+    'Gagal menyintesis dokumen.'
+  );
 
   return {
     ...json.result,
@@ -606,20 +601,52 @@ export const requestSynthesizeDocument = async (payload: {
   };
 };
 
+async function postAiJson<T = any>(
+  url: string,
+  body: unknown,
+  fallbackError: string
+): Promise<T> {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const rawText = await res.text();
+  let json: any = null;
+  if (rawText) {
+    try {
+      json = JSON.parse(rawText);
+    } catch {
+      json = null;
+    }
+  }
+
+  if (!res.ok) {
+    const serverMsg = json?.error || (rawText && rawText.length < 180 ? rawText.trim() : '');
+    throw new Error(serverMsg || `${fallbackError} (HTTP ${res.status})`);
+  }
+
+  if (!json) {
+    throw new Error(`${fallbackError} (Respons server bukan JSON valid).`);
+  }
+
+  if (!json.success) {
+    throw new Error(json.error || fallbackError);
+  }
+
+  return json as T;
+}
+
 export const requestAnalyzeConnection = async (
   itemA: DiscoverSourceItem,
   itemB: DiscoverSourceItem
 ): Promise<ConnectionAnalysis> => {
-  const res = await fetch('/api/discover/analyze-connection', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ itemA, itemB }),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new Error(json.error || 'Gagal menganalisis koneksi.');
-  }
+  const json = await postAiJson<any>(
+    '/api/discover/analyze-connection',
+    { itemA, itemB },
+    'Gagal menganalisis koneksi.'
+  );
 
   return {
     ...json.result,
@@ -632,16 +659,11 @@ export const requestAnalyzeConnection = async (
 export const requestSummarizeCluster = async (
   items: DiscoverSourceItem[]
 ): Promise<TopicClusterSummary> => {
-  const res = await fetch('/api/discover/summarize-cluster', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ items }),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new Error(json.error || 'Gagal merangkum tema cluster.');
-  }
+  const json = await postAiJson<any>(
+    '/api/discover/summarize-cluster',
+    { items },
+    'Gagal merangkum tema cluster.'
+  );
 
   return {
     ...json.result,
@@ -694,16 +716,11 @@ export const requestSuggestTags = async (payload: {
   maxSuggestions?: number;
   maxTotalTags?: number;
 }): Promise<TagSuggestionResult> => {
-  const res = await fetch('/api/ai/suggest-tags', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new Error(json.error || 'Gagal membuat saran tag AI.');
-  }
+  const json = await postAiJson<any>(
+    '/api/ai/suggest-tags',
+    payload,
+    'Gagal membuat saran tag AI.'
+  );
 
   return {
     ...json.result,
@@ -728,16 +745,11 @@ export const requestWritingAssist = async (payload: {
   previousSectionSnippet?: string;
   noteType?: string;
 }): Promise<WritingAssistResult> => {
-  const res = await fetch('/api/ai/writing-assist', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new Error(json.error || 'Gagal memproses pendamping AI.');
-  }
+  const json = await postAiJson<any>(
+    '/api/ai/writing-assist',
+    payload,
+    'Gagal memproses pendamping AI.'
+  );
 
   return {
     ...json.result,
@@ -761,16 +773,11 @@ export const requestProjectOutline = async (payload: {
   }[];
   userGuidance?: string;
 }): Promise<ProjectOutlineResult> => {
-  const res = await fetch('/api/ai/project-outline', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
-  });
-
-  const json = await res.json();
-  if (!res.ok || !json.success) {
-    throw new Error(json.error || 'Gagal menyusun kerangka project.');
-  }
+  const json = await postAiJson<any>(
+    '/api/ai/project-outline',
+    payload,
+    'Gagal menyusun kerangka project.'
+  );
 
   return {
     ...json.result,
