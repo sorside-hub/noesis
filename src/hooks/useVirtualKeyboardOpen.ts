@@ -30,12 +30,20 @@ const isTextEditableElement = (el: Element | null): boolean => {
   return false;
 };
 
-const syncKeyboardOffsetCssVar = (offsetPx: number) => {
-  if (typeof document === 'undefined') return;
-  document.documentElement.style.setProperty(
-    '--noesis-kb-offset',
-    `${Math.max(0, Math.round(offsetPx))}px`
-  );
+const syncViewportVars = (offsetPx: number) => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  const root = document.documentElement;
+  const vv = window.visualViewport;
+
+  if (window.innerWidth >= 768) {
+    root.style.removeProperty('--noesis-vv-height');
+    root.style.setProperty('--noesis-kb-offset', '0px');
+    return;
+  }
+
+  const visibleHeight = vv?.height ?? window.innerHeight;
+  root.style.setProperty('--noesis-vv-height', `${Math.max(220, Math.round(visibleHeight))}px`);
+  root.style.setProperty('--noesis-kb-offset', `${Math.max(0, Math.round(offsetPx))}px`);
 };
 
 // Shared singleton state so all consumers (App, MobileNav, TiptapEditor) stay in lockstep
@@ -51,29 +59,39 @@ const setKeyboardState = (next: boolean) => {
   if (currentKeyboardOpen === next) return;
   currentKeyboardOpen = next;
   if (!next) {
-    syncKeyboardOffsetCssVar(0);
+    syncViewportVars(0);
   }
   listeners.forEach((cb) => cb(next));
 };
 
+const pinAppShellScroll = () => {
+  if (typeof window === 'undefined' || typeof document === 'undefined') return;
+  if (window.innerWidth >= 768) return;
+  if (window.scrollY !== 0 && document.querySelector('[data-noesis-app-shell="true"]')) {
+    window.scrollTo(0, 0);
+  }
+};
+
 const updateOffset = () => {
   if (typeof window === 'undefined') return;
+  pinAppShellScroll();
   const vv = window.visualViewport;
   if (!vv || window.innerWidth >= 768 || !currentKeyboardOpen) {
-    syncKeyboardOffsetCssVar(0);
+    syncViewportVars(0);
     return;
   }
   const gap = Math.max(0, window.innerHeight - (vv.height + vv.offsetTop));
-  syncKeyboardOffsetCssVar(gap);
+  syncViewportVars(gap);
 };
 
 const evaluateVisualViewport = () => {
   if (typeof window === 'undefined') return;
+  pinAppShellScroll();
   const width = window.innerWidth;
 
   if (width >= 768) {
     setKeyboardState(false);
-    syncKeyboardOffsetCssVar(0);
+    syncViewportVars(0);
     return;
   }
 
@@ -85,7 +103,7 @@ const evaluateVisualViewport = () => {
     lastKnownWidth = width;
     baselineHeight = Math.max(window.innerHeight, currentHeight);
     setKeyboardState(false);
-    syncKeyboardOffsetCssVar(0);
+    syncViewportVars(0);
     return;
   }
 
@@ -103,9 +121,11 @@ const evaluateVisualViewport = () => {
     updateOffset();
   } else if (shrink < closeThreshold) {
     setKeyboardState(false);
-    syncKeyboardOffsetCssVar(0);
+    syncViewportVars(0);
   } else if (currentKeyboardOpen) {
     updateOffset();
+  } else {
+    syncViewportVars(0);
   }
 };
 
@@ -151,8 +171,8 @@ const initGlobalListeners = () => {
 
 /**
  * Detects whether a mobile virtual keyboard is genuinely open using `visualViewport` height deltas
- * (immune to scroll gestures and browser address bar animations) and keeps `--noesis-kb-offset`
- * synced so mobile toolbars sit flush above the keyboard and bottom navigation hides only while typing.
+ * (immune to scroll gestures and browser address bar animations) and keeps `--noesis-vv-height` and
+ * `--noesis-kb-offset` synced so the app shell fits cleanly above the keyboard on mobile.
  */
 export function useVirtualKeyboardOpen(): boolean {
   const [isOpen, setIsOpen] = useState<boolean>(currentKeyboardOpen);

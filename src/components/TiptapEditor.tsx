@@ -232,8 +232,10 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     editorProps: {
       attributes: {
         class:
-          'tiptap max-w-none focus:outline-none min-h-[460px] text-[16px] leading-[1.85] text-[#292524] dark:text-[#E7E5E4] font-normal selection:bg-[#9A3412]/15 selection:text-[#9A3412] dark:selection:bg-[#C2410C]/30 dark:selection:text-[#FDBA74]',
+          'tiptap max-w-none focus:outline-none min-h-[180px] md:min-h-[460px] text-[16px] leading-[1.85] text-[#292524] dark:text-[#E7E5E4] font-normal selection:bg-[#9A3412]/15 selection:text-[#9A3412] dark:selection:bg-[#C2410C]/30 dark:selection:text-[#FDBA74]',
       },
+      scrollThreshold: { top: 24, right: 0, bottom: 32, left: 0 },
+      scrollMargin: { top: 24, right: 0, bottom: 32, left: 0 },
       ...clipboardProps,
     },
     onFocus: () => {
@@ -255,11 +257,18 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           setIsEditorFocused(false);
           setDesktopSelectionCoords(null);
         }
-      }, 120);
+      }, 140);
     },
     onSelectionUpdate: ({ editor: ed }) => {
-      setSlashTrigger(detectSlashCommandTrigger(ed));
-      if (!ed.state.selection.empty) {
+      const nextSlash = detectSlashCommandTrigger(ed);
+      setSlashTrigger((prev) => {
+        if (!prev && !nextSlash) return prev;
+        if (prev && nextSlash && prev.from === nextSlash.from && prev.to === nextSlash.to && prev.query === nextSlash.query) {
+          return prev;
+        }
+        return nextSlash;
+      });
+      if (typeof window !== 'undefined' && window.innerWidth >= 768 && !ed.state.selection.empty) {
         try {
           const coords = ed.view.coordsAtPos(ed.state.selection.from);
           setDesktopSelectionCoords({ left: coords.left, top: coords.top });
@@ -267,7 +276,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
           setDesktopSelectionCoords(null);
         }
       } else {
-        setDesktopSelectionCoords(null);
+        setDesktopSelectionCoords((prev) => (prev === null ? prev : null));
       }
     },
     onUpdate: ({ editor }) => {
@@ -297,6 +306,43 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [slashTrigger]);
+
+  // Keep caret comfortably visible inside scroll container when mobile keyboard opens/resizes
+  useEffect(() => {
+    if (typeof window === 'undefined' || window.innerWidth >= 768) return;
+    if (!isKeyboardOpen || !isEditorFocused || !editor || editor.isDestroyed) return;
+
+    const container = proseScrollRef.current;
+    if (!container) return;
+
+    const adjustCaretVisibility = () => {
+      if (!editor || editor.isDestroyed || !editor.isFocused) return;
+      try {
+        const coords = editor.view.coordsAtPos(editor.state.selection.head);
+        const rect = container.getBoundingClientRect();
+        const bottomMargin = 28;
+        const topMargin = 20;
+        if (coords.bottom > rect.bottom - bottomMargin) {
+          container.scrollTop += coords.bottom - (rect.bottom - bottomMargin);
+        } else if (coords.top < rect.top + topMargin) {
+          container.scrollTop -= rect.top + topMargin - coords.top;
+        }
+      } catch {
+        // Ignore transient selection coords errors
+      }
+    };
+
+    const raf = requestAnimationFrame(adjustCaretVisibility);
+    const timer = setTimeout(adjustCaretVisibility, 200);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', adjustCaretVisibility);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      vv?.removeEventListener('resize', adjustCaretVisibility);
+    };
+  }, [isKeyboardOpen, isEditorFocused, editor]);
 
   const openAiAssistant = useCallback(
     (autoAction?: WritingAssistAction | null) => {
@@ -640,7 +686,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       onClick={() => setShowActionMenu(false)}
     >
       {/* Main Center Canvas */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Top Header Bar */}
         <div className="flex items-center justify-between px-3 sm:px-6 pt-[max(0.625rem,env(safe-area-inset-top))] pb-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2]/90 dark:bg-[#151413]/90 backdrop-blur-sm z-10 shrink-0">
           {/* Left: Library Back Navigation & Note Type */}
@@ -1081,9 +1127,93 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 </div>
               </div>
 
+              {/* Link Dialog Modal */}
+              {showLinkDialog && (
+                <div className="absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 w-[min(20rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
+                  <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-2">Insert Web Hyperlink</p>
+                  <input
+                    type="url"
+                    value={linkUrl}
+                    onChange={(e) => setLinkUrl(e.target.value)}
+                    placeholder="https://example.com/essay"
+                    className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] mb-2"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setShowLinkDialog(false)}
+                      className="text-xs px-2 py-1 text-[#6B635B] dark:text-[#A8A196] hover:underline"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleSetLink}
+                      className="text-xs px-3 py-1 bg-[#9A3412] text-white rounded-md hover:bg-[#78280E]"
+                    >
+                      Apply Link
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Image Plate Modal */}
+              {showImageDialog && (
+                <div className="absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 w-[min(22rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
+                  <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-1">Insert Archival Visual Plate</p>
+                  <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196] mb-2">
+                    Add a study illustration or photograph figure placeholder into this essay.
+                  </p>
+                  <input
+                    type="text"
+                    value={imageCaption}
+                    onChange={(e) => setImageCaption(e.target.value)}
+                    placeholder="Caption (e.g., The Solitary Library of Montaigne)"
+                    className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] mb-3"
+                  />
+                  <div className="flex justify-end gap-2">
+                    <button
+                      onClick={() => setShowImageDialog(false)}
+                      className="text-xs px-2 py-1 text-[#6B635B] dark:text-[#A8A196] hover:underline"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={handleInsertMockImage}
+                      className="text-xs px-3 py-1 bg-[#9A3412] text-white rounded-md hover:bg-[#78280E]"
+                    >
+                      Insert Plate
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Prose Editor Scrollable Area - Compact on mobile (px-3), generous on desktop */}
+              <div
+                ref={proseScrollRef}
+                className="noesis-editor-scroll flex-1 min-h-0 overflow-y-auto px-3 sm:px-10 md:px-16 lg:px-24 py-3 sm:py-8 max-w-4xl mx-auto w-full"
+              >
+                {/* Title Input */}
+                <div className="mb-2 sm:mb-4">
+                  <input
+                    type="text"
+                    value={title}
+                    onChange={handleTitleChange}
+                    onBlur={handleTitleBlur}
+                    placeholder="Untitled Note"
+                    className="w-full font-serif text-2xl sm:text-4xl lg:text-5xl font-medium tracking-tight bg-transparent text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none placeholder:text-[#9C9388]/60 dark:placeholder:text-[#736C62]/60 border-none p-0"
+                  />
+                </div>
+
+                <div className="h-px w-full bg-[#E8E2D8] dark:bg-[#2F2B28] my-3 sm:my-6" />
+
+                {/* Tiptap Canvas */}
+                <EditorContent editor={editor} className="cursor-text pb-8 md:pb-24" />
+              </div>
+
+              {/* Mobile Formatting Toolbar: Static flex footer (cannot float/lift on overscroll) */}
               {showMobileToolbar && (
                 <div
-                  className="md:hidden fixed left-0 right-0 bottom-[var(--noesis-kb-offset,0px)] z-40 bg-[#F5EFEB]/95 dark:bg-[#1E1C1A]/95 backdrop-blur-md border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2.5 py-1.5 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150"
+                  onMouseDown={keepFocus}
+                  className="md:hidden shrink-0 z-20 bg-[#F5EFEB] dark:bg-[#1E1C1A] border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2.5 py-1.5"
                   role="toolbar"
                   aria-label="Editor formatting toolbar"
                 >
@@ -1095,85 +1225,6 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
             </>
           );
         })()}
-
-        {/* Link Dialog Modal */}
-        {showLinkDialog && (
-          <div className="absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 w-[min(20rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
-            <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-2">Insert Web Hyperlink</p>
-            <input
-              type="url"
-              value={linkUrl}
-              onChange={(e) => setLinkUrl(e.target.value)}
-              placeholder="https://example.com/essay"
-              className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] mb-2"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowLinkDialog(false)}
-                className="text-xs px-2 py-1 text-[#6B635B] dark:text-[#A8A196] hover:underline"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleSetLink}
-                className="text-xs px-3 py-1 bg-[#9A3412] text-white rounded-md hover:bg-[#78280E]"
-              >
-                Apply Link
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Image Plate Modal */}
-        {showImageDialog && (
-          <div className="absolute top-16 sm:top-24 left-1/2 -translate-x-1/2 z-30 w-[min(22rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
-            <p className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] mb-1">Insert Archival Visual Plate</p>
-            <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196] mb-2">
-              Add a study illustration or photograph figure placeholder into this essay.
-            </p>
-            <input
-              type="text"
-              value={imageCaption}
-              onChange={(e) => setImageCaption(e.target.value)}
-              placeholder="Caption (e.g., The Solitary Library of Montaigne)"
-              className="w-full text-xs px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-[#FAF7F2] dark:bg-[#151413] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] mb-3"
-            />
-            <div className="flex justify-end gap-2">
-              <button
-                onClick={() => setShowImageDialog(false)}
-                className="text-xs px-2 py-1 text-[#6B635B] dark:text-[#A8A196] hover:underline"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleInsertMockImage}
-                className="text-xs px-3 py-1 bg-[#9A3412] text-white rounded-md hover:bg-[#78280E]"
-              >
-                Insert Plate
-              </button>
-            </div>
-          </div>
-        )}
-
-        {/* Prose Editor Scrollable Area - Compact on mobile (px-3), generous on desktop */}
-        <div ref={proseScrollRef} className="flex-1 overflow-y-auto px-3 sm:px-10 md:px-16 lg:px-24 py-3 sm:py-8 max-w-4xl mx-auto w-full">
-          {/* Title Input */}
-          <div className="mb-2 sm:mb-4">
-            <input
-              type="text"
-              value={title}
-              onChange={handleTitleChange}
-              onBlur={handleTitleBlur}
-              placeholder="Untitled Note"
-              className="w-full font-serif text-2xl sm:text-4xl lg:text-5xl font-medium tracking-tight bg-transparent text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none placeholder:text-[#9C9388]/60 dark:placeholder:text-[#736C62]/60 border-none p-0"
-            />
-          </div>
-
-          <div className="h-px w-full bg-[#E8E2D8] dark:bg-[#2F2B28] my-3 sm:my-6" />
-
-          {/* Tiptap Canvas */}
-          <EditorContent editor={editor} className="cursor-text pb-24" />
-        </div>
       </div>
 
       {/* Desktop Collapsible Inspector Panel (2 Centered Tabs: Metadata & Related) */}

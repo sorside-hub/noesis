@@ -44,6 +44,10 @@
     --accent-sage: #86A789;
   }
 
+  html, body {
+    overscroll-behavior: none;
+  }
+
   body {
     font-family: var(--font-sans);
     background-color: var(--canvas-bg);
@@ -53,6 +57,13 @@
   h1, h2, h3, .font-editorial {
     font-family: var(--font-serif);
   }
+}
+
+/* Mobile-friendly scroll containment & bottom caret breathing room for editors */
+.noesis-editor-scroll {
+  overscroll-behavior-y: contain;
+  scroll-padding-bottom: 4.5rem;
+  -webkit-overflow-scrolling: touch;
 }
 
 /* Custom Scrollbars for Editorial Panels */

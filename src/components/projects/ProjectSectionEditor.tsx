@@ -145,9 +145,11 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
     editorProps: {
       attributes: {
         class: `tiptap max-w-none focus:outline-none ${
-          inlineMaster ? 'min-h-[160px]' : 'min-h-[360px]'
+          inlineMaster ? 'min-h-[160px]' : 'min-h-[180px] md:min-h-[360px]'
         } text-[15px] sm:text-[16px] leading-[1.8] text-[#292524] dark:text-[#E7E5E4] font-normal selection:bg-[#9A3412]/15 selection:text-[#9A3412] dark:selection:bg-[#C2410C]/30 dark:selection:text-[#FDBA74]`,
       },
+      scrollThreshold: { top: 24, right: 0, bottom: 32, left: 0 },
+      scrollMargin: { top: 24, right: 0, bottom: 32, left: 0 },
       ...clipboardProps,
     },
     onFocus: () => {
@@ -167,11 +169,18 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
           setIsEditorFocused(false);
           setDesktopSelectionCoords(null);
         }
-      }, 120);
+      }, 140);
     },
     onSelectionUpdate: ({ editor: ed }) => {
-      setSlashTrigger(detectSlashCommandTrigger(ed));
-      if (!ed.state.selection.empty) {
+      const nextSlash = detectSlashCommandTrigger(ed);
+      setSlashTrigger((prev) => {
+        if (!prev && !nextSlash) return prev;
+        if (prev && nextSlash && prev.from === nextSlash.from && prev.to === nextSlash.to && prev.query === nextSlash.query) {
+          return prev;
+        }
+        return nextSlash;
+      });
+      if (typeof window !== 'undefined' && window.innerWidth >= 768 && !ed.state.selection.empty) {
         try {
           const coords = ed.view.coordsAtPos(ed.state.selection.from);
           setDesktopSelectionCoords({ left: coords.left, top: coords.top });
@@ -179,7 +188,7 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
           setDesktopSelectionCoords(null);
         }
       } else {
-        setDesktopSelectionCoords(null);
+        setDesktopSelectionCoords((prev) => (prev === null ? prev : null));
       }
     },
     onUpdate: ({ editor: ed }) => {
@@ -281,6 +290,44 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [slashTrigger]);
+
+  // Keep caret comfortably visible inside scroll container when mobile keyboard opens/resizes
+  useEffect(() => {
+    if (inlineMaster) return;
+    if (typeof window === 'undefined' || window.innerWidth >= 768) return;
+    if (!isKeyboardOpen || !isEditorFocused || !editor || editor.isDestroyed) return;
+
+    const container = proseScrollRef.current;
+    if (!container) return;
+
+    const adjustCaretVisibility = () => {
+      if (!editor || editor.isDestroyed || !editor.isFocused) return;
+      try {
+        const coords = editor.view.coordsAtPos(editor.state.selection.head);
+        const rect = container.getBoundingClientRect();
+        const bottomMargin = 28;
+        const topMargin = 20;
+        if (coords.bottom > rect.bottom - bottomMargin) {
+          container.scrollTop += coords.bottom - (rect.bottom - bottomMargin);
+        } else if (coords.top < rect.top + topMargin) {
+          container.scrollTop -= rect.top + topMargin - coords.top;
+        }
+      } catch {
+        // Ignore transient selection coords errors
+      }
+    };
+
+    const raf = requestAnimationFrame(adjustCaretVisibility);
+    const timer = setTimeout(adjustCaretVisibility, 200);
+    const vv = window.visualViewport;
+    vv?.addEventListener('resize', adjustCaretVisibility);
+
+    return () => {
+      cancelAnimationFrame(raf);
+      clearTimeout(timer);
+      vv?.removeEventListener('resize', adjustCaretVisibility);
+    };
+  }, [inlineMaster, isKeyboardOpen, isEditorFocused, editor]);
 
   const openAiAssistant = useCallback(
     (autoAction?: WritingAssistAction | null) => {
@@ -529,8 +576,8 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
         inlineMaster
           ? 'rounded-xl border border-[#9A3412]/50 dark:border-[#EA580C]/50 shadow-sm'
           : isMobileSheet
-          ? 'h-full'
-          : 'h-full rounded-2xl border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs overflow-hidden'
+          ? 'h-full min-h-0 overflow-hidden'
+          : 'h-full min-h-0 rounded-2xl border border-[#E8E2D8] dark:border-[#2F2B28] shadow-xs overflow-hidden'
       }`}
     >
       {/* Top Action Header */}
@@ -611,19 +658,6 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
         </div>
       </div>
 
-      {/* Keyboard-aware Floating Mobile Toolbar */}
-      {showMobileToolbar && (
-        <div
-          className="md:hidden fixed left-0 right-0 bottom-[var(--noesis-kb-offset,0px)] z-50 bg-[#F5EFEB]/95 dark:bg-[#1E1C1A]/95 backdrop-blur-md border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2.5 py-1.5 shadow-lg animate-in fade-in slide-in-from-bottom-2 duration-150"
-          role="toolbar"
-          aria-label="Editor formatting toolbar"
-        >
-          <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-            {renderToolbarButtons(true)}
-          </div>
-        </div>
-      )}
-
       {/* Link Dialog */}
       {showLinkDialog && (
         <div className="absolute top-14 sm:top-20 left-1/2 -translate-x-1/2 z-40 w-[min(20rem,calc(100vw-2rem))] p-3 bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] rounded-xl shadow-xl">
@@ -664,8 +698,8 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
           inlineMaster
             ? 'px-3 sm:px-5 py-3 sm:py-4'
             : isMobileSheet
-            ? 'flex-1 overflow-y-auto px-3 py-3'
-            : 'flex-1 overflow-y-auto px-5 sm:px-8 lg:px-10 py-4 sm:py-6'
+            ? 'noesis-editor-scroll flex-1 min-h-0 overflow-y-auto px-3 py-3'
+            : 'noesis-editor-scroll flex-1 min-h-0 overflow-y-auto px-5 sm:px-8 lg:px-10 py-4 sm:py-6'
         }`}
       >
         <div className={inlineMaster ? 'mb-2' : 'mb-3'}>
@@ -685,9 +719,27 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
 
         <EditorContent
           editor={editor}
-          className={`cursor-text ${inlineMaster ? 'pb-4' : 'pb-20'}`}
+          className={`cursor-text ${inlineMaster ? 'pb-4' : 'pb-6 md:pb-20'}`}
         />
       </div>
+
+      {/* Mobile Formatting Toolbar: Static flex footer when full/sheet editor, clean fixed fallback if inlineMaster */}
+      {showMobileToolbar && (
+        <div
+          onMouseDown={keepFocus}
+          className={
+            inlineMaster
+              ? 'md:hidden fixed left-0 right-0 bottom-[var(--noesis-kb-offset,0px)] z-50 bg-[#F5EFEB] dark:bg-[#1E1C1A] border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2.5 py-1.5'
+              : 'md:hidden shrink-0 z-20 bg-[#F5EFEB] dark:bg-[#1E1C1A] border-t border-[#E8E2D8] dark:border-[#2F2B28] px-2.5 py-1.5'
+          }
+          role="toolbar"
+          aria-label="Editor formatting toolbar"
+        >
+          <div className="flex items-center gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {renderToolbarButtons(true)}
+          </div>
+        </div>
+      )}
 
       {/* Desktop-only Floating AI Selection Pill */}
       {desktopSelectionCoords && !showAiSheet && isEditorFocused && (

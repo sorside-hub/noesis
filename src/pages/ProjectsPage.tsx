@@ -1245,7 +1245,7 @@ export const ProjectsPage: React.FC = () => {
 
         {/* MOBILE FULLSCREEN SECTION EDITOR SHEET */}
         {isMobileEditorOpen && activeSection && (
-          <div className="lg:hidden fixed inset-0 z-40 bg-[#FAF7F2] dark:bg-[#151413] flex flex-col">
+          <div className="lg:hidden fixed top-0 left-0 right-0 h-[var(--noesis-vv-height,100dvh)] z-40 bg-[#FAF7F2] dark:bg-[#151413] flex flex-col overflow-hidden">
             <ProjectSectionEditor
               projectId={activeProject.id}
               section={activeSection}
