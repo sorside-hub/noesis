@@ -7,6 +7,29 @@
     <meta name="description" content="A minimalist editorial personal intellectual workspace and reflective note system." />
     <meta property="og:title" content="Noesis — Personal Intellectual Workspace" />
     <meta property="og:description" content="A minimalist editorial personal intellectual workspace and reflective note system." />
+    <script>
+      // Gracefully handle benign Vite HMR WebSocket errors in AI Studio iframe environment (HMR is disabled in preview)
+      window.addEventListener('unhandledrejection', function (e) {
+        if (
+          e.reason &&
+          (e.reason.message?.includes('WebSocket closed without opened') ||
+            e.reason.message?.includes('WebSocket') ||
+            e.reason?.stack?.includes('@vite/client'))
+        ) {
+          e.preventDefault();
+        }
+      });
+      window.addEventListener('error', function (e) {
+        if (
+          e.message?.includes('WebSocket closed without opened') ||
+          e.filename?.includes('@vite/client') ||
+          e.error?.message?.includes('WebSocket closed without opened')
+        ) {
+          e.preventDefault();
+          e.stopImmediatePropagation();
+        }
+      });
+    </script>
     <meta name="theme-color" content="#FAF7F2" id="meta-theme-color" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
