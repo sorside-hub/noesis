@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { AnimatePresence, motion } from 'motion/react';
 
 export interface MobileBottomSheetProps {
@@ -111,7 +112,7 @@ export const MobileBottomSheet: React.FC<MobileBottomSheetProps> = ({
         desktopClassName || 'md:max-w-xl'
       }`;
 
-  return (
+  const sheetTree = (
     <AnimatePresence>
       {shouldRender && (
         <div
@@ -162,4 +163,10 @@ export const MobileBottomSheet: React.FC<MobileBottomSheetProps> = ({
       )}
     </AnimatePresence>
   );
+
+  if (typeof document !== 'undefined') {
+    return createPortal(sheetTree, document.body);
+  }
+
+  return sheetTree;
 };

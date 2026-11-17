@@ -169,7 +169,7 @@ interface NoesisContextType {
   // Notes
   notes: Note[];
   activeNote: Note | undefined;
-  createNote: (type?: ManualNoteType) => string;
+  createNote: (type?: ManualNoteType, options?: { openInEditor?: boolean }) => string;
   createNoteFromCopilot: (data: {
     title: string;
     content: string;
@@ -1973,7 +1973,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // Handlers
   const toggleSidebar = () => setIsSidebarCollapsed((prev) => !prev);
 
-  const createNote = (type?: ManualNoteType): string => {
+  const createNote = (type?: ManualNoteType, options?: { openInEditor?: boolean }): string => {
     const now = new Date().toISOString();
     const newNote: Note = {
       id: `note-${Date.now()}`,
@@ -1991,9 +1991,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
 
     setNotes((prev) => [newNote, ...prev]);
     notesRef.current = [newNote, ...notesRef.current];
-    activeNoteIdRef.current = newNote.id;
-    setActiveNoteIdState(newNote.id);
-    setActiveView('editor', newNote.id);
+    if (options?.openInEditor !== false) {
+      activeNoteIdRef.current = newNote.id;
+      setActiveNoteIdState(newNote.id);
+      setActiveView('editor', newNote.id);
+    }
 
     if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;

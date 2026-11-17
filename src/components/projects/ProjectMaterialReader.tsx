@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Note, Fragment } from '../../types';
 import { cleanTextForEmbedding } from '../../lib/cloudflareEmbedding';
+import { useBackOverlay } from '../../hooks/useBackOverlay';
+import { InlineProjectNoteEditor } from './InlineProjectNoteEditor';
 import {
   BookOpen,
   Feather,
@@ -34,6 +36,8 @@ interface ProjectMaterialReaderProps {
   backLabel?: string;
   onClose?: () => void;
   compact?: boolean;
+  autoEditNoteRequest?: { noteId: string; nonce: number } | null;
+  onConsumeAutoEditRequest?: () => void;
 }
 
 export const countWordsFromText = (rawTextOrHtml: string): number => {
@@ -53,8 +57,49 @@ export const ProjectMaterialReader: React.FC<ProjectMaterialReaderProps> = ({
   backLabel = 'Daftar Bahan',
   onClose,
   compact = false,
+  autoEditNoteRequest = null,
+  onConsumeAutoEditRequest,
 }) => {
   const [copiedText, setCopiedText] = useState(false);
+  const [isEditingInline, setIsEditingInline] = useState(false);
+  const [shouldAutoFocusTitle, setShouldAutoFocusTitle] = useState(false);
+  const prevItemKeyRef = useRef<string | null>(null);
+  const lastAutoEditNonceRef = useRef<number>(0);
+
+  const selectedKey = selected ? `${selected.kind}:${selected.item.id}` : null;
+
+  useEffect(() => {
+    const isMatchingAutoEdit = Boolean(
+      autoEditNoteRequest &&
+        selected?.kind === 'note' &&
+        selected.item.id === autoEditNoteRequest.noteId &&
+        autoEditNoteRequest.nonce !== lastAutoEditNonceRef.current
+    );
+
+    if (isMatchingAutoEdit && autoEditNoteRequest) {
+      lastAutoEditNonceRef.current = autoEditNoteRequest.nonce;
+      prevItemKeyRef.current = selectedKey;
+      setIsEditingInline(true);
+      setShouldAutoFocusTitle(true);
+      onConsumeAutoEditRequest?.();
+      return;
+    }
+
+    if (prevItemKeyRef.current !== selectedKey) {
+      prevItemKeyRef.current = selectedKey;
+      setIsEditingInline(false);
+      setShouldAutoFocusTitle(false);
+    }
+  }, [selectedKey, selected, autoEditNoteRequest, onConsumeAutoEditRequest]);
+
+  useBackOverlay(
+    isEditingInline && selected?.kind === 'note',
+    () => {
+      setIsEditingInline(false);
+      setShouldAutoFocusTitle(false);
+    },
+    `project-reader-inline-edit-${selected?.item.id || 'none'}`
+  );
 
   if (!selected) {
     return (
@@ -75,6 +120,24 @@ export const ProjectMaterialReader: React.FC<ProjectMaterialReaderProps> = ({
   const isNote = selected.kind === 'note';
   const note = isNote ? selected.item : null;
   const fragment = !isNote ? selected.item : null;
+
+  if (isEditingInline && isNote && note) {
+    return (
+      <InlineProjectNoteEditor
+        note={note}
+        compact={compact}
+        onDone={() => {
+          setIsEditingInline(false);
+          setShouldAutoFocusTitle(false);
+        }}
+        onOpenFullEditor={(id) => onEdit('note', id)}
+        onBack={onBack}
+        backLabel={backLabel}
+        onClose={onClose}
+        autoFocusTitle={shouldAutoFocusTitle}
+      />
+    );
+  }
 
   const title = selected.item.title || 'Tanpa Judul';
   const tags = selected.item.tags || [];
@@ -208,8 +271,15 @@ export const ProjectMaterialReader: React.FC<ProjectMaterialReaderProps> = ({
 
           <button
             type="button"
-            onClick={() => onEdit(selected.kind, selected.item.id)}
-            title={isNote ? 'Buka & edit di Library' : 'Buka & edit Fragment'}
+            onClick={() => {
+              if (isNote) {
+                setShouldAutoFocusTitle(false);
+                setIsEditingInline(true);
+              } else {
+                onEdit(selected.kind, selected.item.id);
+              }
+            }}
+            title={isNote ? 'Edit catatan langsung di sini' : 'Buka & edit Fragment'}
             className="px-2.5 py-1.5 rounded-lg border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#272422] text-[#221F1D] dark:text-[#EDE8E1] text-[11px] font-medium hover:border-[#9A3412] transition-colors flex items-center gap-1"
           >
             <Edit3 size={12} />
@@ -291,7 +361,7 @@ export const ProjectMaterialReader: React.FC<ProjectMaterialReaderProps> = ({
             />
           ) : (
             <p className="text-xs sm:text-sm italic text-[#9C9388] dark:text-[#736C62]">
-              Catatan ini belum memiliki isi. Klik <strong>Edit Catatan</strong> untuk mulai menulis.
+              Catatan ini belum memiliki isi. Klik <strong>{compact ? 'Edit' : 'Edit Catatan'}</strong> untuk mulai menulis.
             </p>
           )
         ) : fragment?.content ? (

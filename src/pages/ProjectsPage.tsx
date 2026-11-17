@@ -189,6 +189,10 @@ export const ProjectsPage: React.FC = () => {
 
   // Insert-to-section signal & toast
   const [insertRequest, setInsertRequest] = useState<{ nonce: number; html: string } | null>(null);
+  const [autoEditNoteRequest, setAutoEditNoteRequest] = useState<{
+    noteId: string;
+    nonce: number;
+  } | null>(null);
   const [studioNotice, setStudioNotice] = useState<string | null>(null);
 
   // Modals & Popovers
@@ -267,6 +271,7 @@ export const ProjectsPage: React.FC = () => {
     setDesktopRefReaderKey(null);
     setMobileRefReaderKey(null);
     setMobileQuickRefReaderKey(null);
+    setAutoEditNoteRequest(null);
     setShowMobileQuickRefSheet(false);
     setIsMobileEditorOpen(false);
     setNewSectionTitle('');
@@ -407,13 +412,21 @@ export const ProjectsPage: React.FC = () => {
     }
   };
 
-  const handleCreateNoteInsideProject = () => {
+  const handleCreateNoteInsideProject = (
+    target: 'desktop' | 'mobile-tab' | 'mobile-quick' = 'desktop'
+  ) => {
     if (!activeProject) return;
-    flushProjectSave(activeProject.id);
-    const newNoteId = createNote('thought');
+    const newNoteId = createNote('thought', { openInEditor: false });
     linkItemToProject(activeProject.id, 'note', newNoteId);
-    setActiveNoteId(newNoteId);
-    setActiveView('editor');
+    setAutoEditNoteRequest({ noteId: newNoteId, nonce: Date.now() });
+    if (target === 'desktop') {
+      setDesktopLeftTab('references');
+      setDesktopRefReaderKey({ kind: 'note', id: newNoteId });
+    } else if (target === 'mobile-quick') {
+      setMobileQuickRefReaderKey({ kind: 'note', id: newNoteId });
+    } else {
+      setMobileRefReaderKey({ kind: 'note', id: newNoteId });
+    }
   };
 
   const handleSendProjectToSynthesis = () => {
@@ -719,7 +732,9 @@ export const ProjectsPage: React.FC = () => {
     const renderReferencesList = (
       onSelectItem: (kind: 'note' | 'fragment', id: string) => void,
       compact = false,
-      allowManagement = true
+      allowManagement = true,
+      allowSynthesisAction = allowManagement,
+      createTarget: 'desktop' | 'mobile-tab' | 'mobile-quick' = 'desktop'
     ) => (
       <div
         className={`bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28] ${
@@ -742,7 +757,7 @@ export const ProjectsPage: React.FC = () => {
               </button>
               <button
                 type="button"
-                onClick={handleCreateNoteInsideProject}
+                onClick={() => handleCreateNoteInsideProject(createTarget)}
                 className="px-2.5 py-1.5 rounded-lg bg-[#9A3412] dark:bg-[#EA580C] text-white text-[11px] font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] flex items-center gap-1 transition-colors"
               >
                 <FilePlus2 size={12} />
@@ -834,7 +849,7 @@ export const ProjectsPage: React.FC = () => {
           </div>
         )}
 
-        {allowManagement && totalLinkedCount >= 2 && (
+        {allowSynthesisAction && totalLinkedCount >= 2 && (
           <button
             type="button"
             onClick={handleSendProjectToSynthesis}
@@ -1095,6 +1110,8 @@ export const ProjectsPage: React.FC = () => {
                     backLabel="Daftar Bahan"
                     onInsertToSection={handleInsertMaterialToActiveSection}
                     onEdit={handleEditMaterialInOrigin}
+                    autoEditNoteRequest={autoEditNoteRequest}
+                    onConsumeAutoEditRequest={() => setAutoEditNoteRequest(null)}
                     onUnlink={(kind, id) => {
                       unlinkItemFromProject(activeProject.id, kind, id);
                       setDesktopRefReaderKey(null);
@@ -1106,7 +1123,9 @@ export const ProjectsPage: React.FC = () => {
                   {renderReferencesList(
                     (kind, id) => setDesktopRefReaderKey({ kind, id }),
                     false,
-                    true
+                    true,
+                    true,
+                    'desktop'
                   )}
                 </div>
               )}
@@ -1243,7 +1262,9 @@ export const ProjectsPage: React.FC = () => {
                 renderReferencesList(
                   (kind, id) => setMobileRefReaderKey({ kind, id }),
                   true,
-                  true
+                  true,
+                  true,
+                  'mobile-tab'
                 )
               )}
             </div>
@@ -1302,7 +1323,7 @@ export const ProjectsPage: React.FC = () => {
             </div>
           }
         >
-          <div className="flex-1 min-h-0 overflow-hidden p-2 bg-[#FAF7F2] dark:bg-[#151413]">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-2 bg-[#FAF7F2] dark:bg-[#151413]">
             {mobileQuickRefMaterial ? (
               <ProjectMaterialReader
                 selected={mobileQuickRefMaterial}
@@ -1311,13 +1332,17 @@ export const ProjectsPage: React.FC = () => {
                 backLabel="Daftar Bahan"
                 onInsertToSection={handleInsertMaterialToActiveSection}
                 onEdit={handleEditMaterialInOrigin}
+                autoEditNoteRequest={autoEditNoteRequest}
+                onConsumeAutoEditRequest={() => setAutoEditNoteRequest(null)}
               />
             ) : (
               <div className="h-full overflow-y-auto overscroll-contain">
                 {renderReferencesList(
                   (kind, id) => setMobileQuickRefReaderKey({ kind, id }),
                   true,
-                  false
+                  true,
+                  false,
+                  'mobile-quick'
                 )}
               </div>
             )}
@@ -1332,13 +1357,15 @@ export const ProjectsPage: React.FC = () => {
           mobileBreakpoint="lg"
           desktopVariant="hidden"
         >
-          <div className="flex-1 min-h-0 overflow-hidden p-2 bg-[#FAF7F2] dark:bg-[#151413]">
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden p-2 bg-[#FAF7F2] dark:bg-[#151413]">
             {activeReaderMaterial && (
               <ProjectMaterialReader
                 selected={activeReaderMaterial}
                 compact
                 onInsertToSection={handleInsertMaterialToActiveSection}
                 onEdit={handleEditMaterialInOrigin}
+                autoEditNoteRequest={autoEditNoteRequest}
+                onConsumeAutoEditRequest={() => setAutoEditNoteRequest(null)}
                 onUnlink={(kind, id) => {
                   unlinkItemFromProject(activeProject.id, kind, id);
                   setMobileRefReaderKey(null);
