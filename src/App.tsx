@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { NoesisProvider, useNoesis } from './context/NoesisContext';
 import { Sidebar } from './components/Sidebar';
 import { StreamColumn } from './components/StreamColumn';
@@ -22,7 +22,6 @@ import { Menu, Sun, Moon, Monitor, Settings as SettingsIcon, Loader2, CheckCircl
 const WorkspaceShell: React.FC = () => {
   const {
     activeView,
-    setActiveView,
     selectTab,
     isMobileDrawerOpen,
     setIsMobileDrawerOpen,
@@ -34,11 +33,39 @@ const WorkspaceShell: React.FC = () => {
     autoSyncNotice,
     safetyModalAction,
     closeSafetyModal,
+    createNote,
+    openFragmentDrawer,
   } = useNoesis();
   useVirtualKeyboardOpen();
 
   useBackOverlay(isMobileDrawerOpen, () => setIsMobileDrawerOpen(false), 'mobile-sidebar-drawer');
   useBackOverlay(Boolean(safetyModalAction), closeSafetyModal, 'safety-confirm-modal');
+
+  const shortcutHandledRef = useRef(false);
+  useEffect(() => {
+    if (authLoading || (!authUser && !offlineBypass) || shortcutHandledRef.current) return;
+    if (typeof window === 'undefined') return;
+
+    const params = new URLSearchParams(window.location.search);
+    const shortcut = params.get('shortcut');
+    if (shortcut !== 'new-note' && shortcut !== 'capture') return;
+
+    shortcutHandledRef.current = true;
+    params.delete('shortcut');
+    const nextSearch = params.toString();
+    const cleanUrl = `${window.location.pathname}${nextSearch ? `?${nextSearch}` : ''}${window.location.hash}`;
+    try {
+      window.history.replaceState(window.history.state, '', cleanUrl);
+    } catch {
+      // ignore history errors
+    }
+
+    if (shortcut === 'new-note') {
+      createNote('thought');
+    } else if (shortcut === 'capture') {
+      openFragmentDrawer(null);
+    }
+  }, [authLoading, authUser, offlineBypass, createNote, openFragmentDrawer]);
 
   const cycleTheme = () => {
     if (theme === 'light') setTheme('dark');

@@ -11,7 +11,13 @@ export default defineConfig(() => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['favicon.ico', 'apple-touch-icon.png', 'icon.svg'],
+        includeAssets: [
+          'favicon.ico',
+          'apple-touch-icon.png',
+          'icon.svg',
+          'shortcut-new-note.png',
+          'shortcut-capture.png',
+        ],
         manifest: {
           id: '/',
           name: 'Noesis — Intellectual Sanctuary',
@@ -40,6 +46,34 @@ export default defineConfig(() => {
               sizes: '512x512',
               type: 'image/png',
               purpose: 'maskable',
+            },
+          ],
+          shortcuts: [
+            {
+              name: 'New Note',
+              short_name: 'New Note',
+              description: 'Buat catatan baru di Noesis',
+              url: '/?shortcut=new-note',
+              icons: [
+                {
+                  src: '/shortcut-new-note.png',
+                  sizes: '192x192',
+                  type: 'image/png',
+                },
+              ],
+            },
+            {
+              name: 'Capture',
+              short_name: 'Capture',
+              description: 'Tangkap pemikiran cepat ke Fragments',
+              url: '/?shortcut=capture',
+              icons: [
+                {
+                  src: '/shortcut-capture.png',
+                  sizes: '192x192',
+                  type: 'image/png',
+                },
+              ],
             },
           ],
         },
