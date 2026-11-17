@@ -836,8 +836,7 @@ export async function assistWritingWithGemini(
   const cleanTitle = String(title || '').trim();
   const cleanCustom = String(customPrompt || '').trim();
   const cleanBefore = stripHtml(String(surroundingBefore || '')).slice(-2800).trim();
-  const cleanAfter = stripHtml(String(surroundingAfter || '')).slice(0, 1200).trim();
-  const cleanDoc = stripHtml(String(documentExcerpt || '')).slice(0, 6000).trim();
+  const cleanDoc = stripHtml(String(documentExcerpt || '')).slice(0, 14000).trim();
 
   if (mode === 'selection' && !cleanSelected) {
     throw new DiscoverApiError('Pilih atau blok teks terlebih dahulu untuk diolah AI.', 400);
@@ -864,15 +863,15 @@ export async function assistWritingWithGemini(
     shorten:
       'Persingkat dan padatkan teks terpilih agar lebih tajam dan langsung ke inti, tanpa membuang gagasan utamanya.',
     expand:
-      'Perluas dan elaborasi teks terpilih menjadi 1-2 paragraf yang lebih utuh, jelas, dan mengalir, selaras dengan konteks tulisan di sekitarnya.',
+      'Perluas dan elaborasi teks terpilih menjadi 1-2 paragraf yang lebih utuh, jelas, dan mengalir.',
     bullets:
       'Ubah teks terpilih menjadi daftar poin (<ul><li>...</li></ul>) yang terstruktur rapi, mudah dipindai, dan jelas.',
     critique:
       'Tinjau secara kritis dan jujur teks terpilih: tunjukkan celah logika, asumsi yang belum diuji, atau ajukan 2-3 pertanyaan tajam untuk memperkuat argumen penulis. JANGAN menulis ulang teksnya—berikan masukan/ulasan saja.',
     continue:
-      'Lanjutkan tulisan secara alami tepat dari kalimat terakhir sebelum kursor (tulis 1-2 paragraf lanjutan yang menyambung mulus dengan alur, bahasa, dan nada tulisan penulis). Jangan mengulang kalimat terakhir.',
+      'Lanjutkan tulisan secara alami tepat dari akhir teks yang diberikan (tulis 1-2 paragraf lanjutan yang menyambung mulus dengan alur, bahasa, dan nada tulisan penulis). Jangan mengulang kalimat terakhir.',
     ideas:
-      'Berikan 2-3 opsi sudut pandang lanjutan, contoh konkret, atau arah pengembangan argumen yang relevan untuk melanjutkan bagian ini dalam format daftar poin ringkas.',
+      'Berikan 2-3 opsi sudut pandang lanjutan, contoh konkret, atau arah pengembangan argumen yang relevan untuk melanjutkan tulisan ini dalam format daftar poin ringkas.',
     summarize:
       'Buat ringkasan jernih dan padat (1 paragraf pendek atau beberapa poin inti) yang menangkap gagasan utama tulisan ini tanpa melebih-lebihkan klaim.',
     custom: `Ikuti instruksi khusus pengguna secara tepat: "${cleanCustom}"`,
@@ -892,20 +891,13 @@ ${previousSectionSnippet ? `- Cuplikan Bagian Sebelumnya: ${stripHtml(previousSe
   const bodyContext =
     mode === 'selection'
       ? `${contextHeader}
-TEKS YANG DIBLOK / TERPILIH (FOKUS UTAMA):
+TEKS YANG DIBLOK / FOKUS UTAMA:
 """
-${cleanSelected.slice(0, 4500)}
-"""
-${cleanBefore ? `\nKONTEKS SEBELUMNYA (sekadar referensi nada & alur):\n${cleanBefore.slice(-1200)}` : ''}
-${cleanAfter ? `\nKONTEKS SESUDAHNYA (sekadar referensi):\n${cleanAfter.slice(0, 800)}` : ''}`
+${cleanSelected.slice(0, 6000)}
+"""`
       : `${contextHeader}
-${
-  action === 'summarize'
-    ? `ISI TULISAN:\n${cleanDoc || cleanBefore || '(Hanya judul)'}`
-    : `TEKS SEBELUM KURSOR:\n${cleanBefore || cleanDoc || '(Baru mulai di judul)'}${
-        cleanAfter ? `\n\nTEKS SETELAH KURSOR:\n${cleanAfter}` : ''
-      }`
-}`;
+ISI TULISAN LENGKAP SAAT INI:
+${cleanDoc || cleanBefore || '(Baru mulai di judul)'}`;
 
   const taskInstruction = actionInstructionMap[action] || actionInstructionMap.custom;
   const extraCustomNote =
@@ -1155,4 +1147,147 @@ ATURAN PENYUSUNAN KERANGKA:
   };
 }
 
+export async function askNoesisWithGemini(
+  apiKey: string | undefined,
+  body: {
+    contextKind?: 'note' | 'project';
+    title?: string;
+    noteType?: string;
+    projectTitle?: string;
+    sectionTitle?: string;
+    selectedText?: string;
+    documentText?: string;
+    attachments?: {
+      id?: string;
+      kind?: 'note' | 'fragment';
+      title?: string;
+      type?: string;
+      content?: string;
+    }[];
+    messages?: {
+      role?: 'user' | 'assistant';
+      text?: string;
+    }[];
+  }
+) {
+  const {
+    contextKind = 'note',
+    title = '',
+    noteType = 'thought',
+    projectTitle = '',
+    sectionTitle = '',
+    selectedText = '',
+    documentText = '',
+    attachments = [],
+    messages = [],
+  } = body || {};
+
+  const normalizedMessages = (Array.isArray(messages) ? messages : [])
+    .map((m) => ({
+      role: m?.role === 'assistant' ? ('model' as const) : ('user' as const),
+      text: String(m?.text || '').trim(),
+    }))
+    .filter((m) => m.text.length > 0)
+    .slice(-14);
+
+  if (normalizedMessages.length === 0 || normalizedMessages[normalizedMessages.length - 1].role !== 'user') {
+    throw new DiscoverApiError('Tuliskan pertanyaan atau pesan terlebih dahulu.', 400);
+  }
+
+  const cleanTitle = String(title || '').trim();
+  const cleanSelected = String(selectedText || '').trim().slice(0, 6000);
+  const cleanDoc = cleanSelected
+    ? ''
+    : stripHtml(String(documentText || '')).slice(0, 14000).trim();
+
+  const safeAttachments = (Array.isArray(attachments) ? attachments : []).slice(0, 4);
+  const attachmentsBlock =
+    safeAttachments.length > 0
+      ? safeAttachments
+          .map((att, idx) => {
+            const labelKind = att?.kind === 'fragment' ? 'Fragment' : 'Catatan';
+            const cleanAttBody = stripHtml(String(att?.content || '')).slice(0, 4000).trim();
+            return `[Referensi @ #${idx + 1}] (${labelKind} · ${att?.type || 'thought'}) Judul: "${
+              String(att?.title || 'Tanpa Judul').trim()
+            }"
+Isi:
+${cleanAttBody || '(kosong)'}`;
+          })
+          .join('\n\n---\n\n')
+      : '';
+
+  const activeContextHeader =
+    contextKind === 'project'
+      ? `KONTEKS TULISAN AKTIF (Bagian Project):
+- Judul Project: ${projectTitle || 'Tanpa Judul'}
+- Bagian Aktif: ${sectionTitle || cleanTitle || 'Tanpa Judul'}`
+      : `KONTEKS CATATAN AKTIF:
+- Tipe: ${noteType}
+- Judul: ${cleanTitle || 'Tanpa Judul'}`;
+
+  const focusSection = cleanSelected
+    ? `TEKS YANG SEDANG DIBLOK / FOKUS DISKUSI SAAT INI:
+"""
+${cleanSelected}
+"""`
+    : `ISI CATATAN AKTIF LENGKAP SAAT INI:
+${cleanDoc || '(Catatan masih kosong atau baru berupa judul)'}`;
+
+  const systemInstruction = `Kamu adalah "Ask Noesis", partner berpikir kritis dan jujur (ala Copilot di editor catatan personal).
+
+PERAN & CARA BERPIKIR:
+1. Fokus utamamu membantu penulis menguji argumen, menemukan celah logika/asumsi tersembunyi, memunculkan sudut pandang kontra (devil's advocate), memperjelas alur, dan mematangkan ide pada tulisan yang sedang disorot penulis.
+2. Kamu BOLEH menggunakan pengetahuan umummu untuk membandingkan, memberi contoh, atau menguji klaim penulis — namun bedakan dengan tegas mana yang tertulis di catatan user dan mana pengetahuan/analisis tambahan darimu.
+3. JANGAN asal memuji atau berbasa-basi ("Tulisanmu sangat bagus dan inspiratif..."). Langsung masuk ke inti analisis secara kritis, konstruktif, dan tajam.
+4. Rujuk bagian atau kalimat spesifik dari teks bila relevan agar masukan terasa konkret, bukan saran generik.
+5. Gunakan bahasa yang sama dengan pertanyaan/catatan penulis (umumnya Bahasa Indonesia yang jernih, lugas, dan editorial).
+6. Format jawaban dengan Markdown ringan yang rapi (**tebal**, poin bernomor/bullet, atau \`>\` kutipan singkat) supaya nyaman dibaca di layar HP maupun desktop. Usahakan ringkas dan padat kecuali user meminta penjabaran panjang.
+
+${activeContextHeader}
+
+${focusSection}${
+    attachmentsBlock
+      ? `\n\n=== CATATAN / FRAGMENT TAMBAHAN YANG DI-MENTION (@) OLEH PENULIS ===\n${attachmentsBlock}`
+      : ''
+  }`;
+
+  // Gemini multi-turn contents must start with a 'user' turn
+  const firstUserIdx = normalizedMessages.findIndex((m) => m.role === 'user');
+  const conversationContents = normalizedMessages.slice(firstUserIdx).map((m) => ({
+    role: m.role,
+    parts: [{ text: m.text }],
+  }));
+
+  const { data: reply, modelUsed, fallbackUsed, aiTrace } = await callGeminiWithDelayedRetry(
+    apiKey,
+    async (ai, model, isFallback) => {
+      const response = await ai.models.generateContent({
+        model,
+        contents: conversationContents,
+        config: {
+          systemInstruction,
+          thinkingConfig: {
+            thinkingLevel: isFallback ? ThinkingLevel.MINIMAL : ThinkingLevel.MEDIUM,
+          },
+        },
+      });
+
+      const text = response.text?.trim();
+      if (!text) {
+        throw new Error('Model mengembalikan respons kosong.');
+      }
+      return text;
+    }
+  );
+
+  return {
+    success: true,
+    modelUsed,
+    fallbackUsed,
+    aiTrace,
+    result: {
+      reply,
+    },
+  };
+}
 

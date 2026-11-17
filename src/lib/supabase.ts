@@ -1,5 +1,12 @@
 import { createClient, SupabaseClient, Session, User, AuthChangeEvent } from '@supabase/supabase-js';
-import { Note, Fragment, DiscoverConnectionRecord, Project, ProjectStatus } from '../types';
+import {
+  Note,
+  Fragment,
+  DiscoverConnectionRecord,
+  Project,
+  ProjectStatus,
+  CopilotChatMessage,
+} from '../types';
 
 export const getSupabaseUrl = (): string => {
   return (import.meta.env.VITE_SUPABASE_URL || '').trim();
@@ -864,6 +871,100 @@ export const deleteProjectFromSupabase = async (projectId: string): Promise<bool
 };
 
 // ============================================================================
+// COPILOT CHATS SYNC (Ask Noesis)
+// ============================================================================
+
+export const fetchCopilotChatFromSupabase = async (
+  sessionKey: string
+): Promise<{
+  messages: CopilotChatMessage[] | null;
+  updatedAt?: string;
+  tableMissing?: boolean;
+}> => {
+  const client = getSupabaseClient();
+  if (!client || !sessionKey) return { messages: null };
+  try {
+    const { data, error } = await client
+      .from('copilot_chats')
+      .select('messages, updated_at')
+      .eq('session_key', sessionKey)
+      .maybeSingle();
+
+    if (error) {
+      if (isMissingRelationError(error)) {
+        return { messages: null, tableMissing: true };
+      }
+      console.warn('Supabase fetchCopilotChat error:', error.message);
+      return { messages: null };
+    }
+
+    if (!data) return { messages: null, tableMissing: false };
+    return {
+      messages: Array.isArray(data.messages) ? (data.messages as CopilotChatMessage[]) : [],
+      updatedAt: data.updated_at || undefined,
+      tableMissing: false,
+    };
+  } catch (err) {
+    console.warn('Supabase fetchCopilotChat network error:', err);
+    return { messages: null };
+  }
+};
+
+export const upsertCopilotChatToSupabase = async (
+  sessionKey: string,
+  messages: CopilotChatMessage[],
+  updatedAt?: string
+): Promise<{ ok: boolean; tableMissing?: boolean }> => {
+  const client = getSupabaseClient();
+  if (!client || !sessionKey) return { ok: false };
+  try {
+    const dbRow: Record<string, any> = {
+      session_key: sessionKey,
+      messages,
+      updated_at: updatedAt || new Date().toISOString(),
+    };
+    const userId = await resolveAuthUserId(client);
+    if (userId) dbRow.user_id = userId;
+
+    const { error } = await client
+      .from('copilot_chats')
+      .upsert(dbRow, { onConflict: 'session_key' });
+
+    if (error) {
+      if (isMissingRelationError(error)) {
+        return { ok: false, tableMissing: true };
+      }
+      console.warn('Supabase upsertCopilotChat error:', error.message);
+      return { ok: false };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.warn('Supabase upsertCopilotChat network error:', err);
+    return { ok: false };
+  }
+};
+
+export const deleteCopilotChatFromSupabase = async (sessionKey: string): Promise<boolean> => {
+  const client = getSupabaseClient();
+  if (!client || !sessionKey) return false;
+  try {
+    const { error } = await client
+      .from('copilot_chats')
+      .delete()
+      .eq('session_key', sessionKey);
+    if (error) {
+      if (isMissingRelationError(error)) return false;
+      console.warn('Supabase deleteCopilotChat error:', error.message);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn('Supabase deleteCopilotChat network error:', err);
+    return false;
+  }
+};
+
+// ============================================================================
 // REALTIME LISTENER
 // ============================================================================
 
@@ -890,6 +991,19 @@ export const subscribeToRealtimeChanges = (
       { event: '*', schema: 'public', table: 'fragments' },
       () => {
         onFragmentsChange();
+      }
+    )
+    .on(
+      'postgres_changes',
+      { event: '*', schema: 'public', table: 'copilot_chats' },
+      (payload: any) => {
+        if (typeof window !== 'undefined') {
+          const sessionKey =
+            payload?.new?.session_key || payload?.old?.session_key || '';
+          window.dispatchEvent(
+            new CustomEvent('noesis-copilot-sync', { detail: { sessionKey } })
+          );
+        }
       }
     );
 

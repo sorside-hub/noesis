@@ -13,6 +13,7 @@ import {
   suggestTagsWithGemini,
   assistWritingWithGemini,
   generateProjectOutlineWithGemini,
+  askNoesisWithGemini,
 } from './shared/geminiDiscover.ts';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -168,6 +169,20 @@ async function startServer() {
       return res.status(err?.status || 500).json({
         success: false,
         error: err?.message || 'Gagal menyusun kerangka project.',
+      });
+    }
+  });
+
+  // 7. ASK NOESIS COPILOT CHAT ENDPOINT
+  app.post('/api/ai/ask-noesis', async (req: Request, res: Response) => {
+    try {
+      const payload = await askNoesisWithGemini(process.env.GEMINI_API_KEY, req.body);
+      return res.json(payload);
+    } catch (err: any) {
+      console.error('Error in /api/ai/ask-noesis:', err);
+      return res.status(err?.status || 500).json({
+        success: false,
+        error: err?.message || 'Gagal memproses Ask Noesis Copilot.',
       });
     }
   });

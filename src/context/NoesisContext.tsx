@@ -52,7 +52,9 @@ import {
   unlinkDiscoverConnectionInSupabase,
   fetchFragmentEmbeddingById,
   deleteDiscoverConnectionsForItem,
+  deleteCopilotChatFromSupabase,
 } from '../lib/supabase';
+import { clearCopilotMessages } from '../lib/copilotStorage';
 import {
   isCloudflareAiConfigured,
   embedAndSyncNote,
@@ -168,6 +170,14 @@ interface NoesisContextType {
   notes: Note[];
   activeNote: Note | undefined;
   createNote: (type?: ManualNoteType) => string;
+  createNoteFromCopilot: (data: {
+    title: string;
+    content: string;
+    tags?: string[];
+    source?: string;
+    sourceNoteId?: string;
+    type?: ManualNoteType;
+  }) => string;
   updateNote: (id: string, updates: Partial<Note>) => void;
   flushNoteSave: (id: string) => void;
   flushNoteOnExit: (id: string, triggerAutoEmbed?: boolean) => Promise<void>;
@@ -2006,6 +2016,96 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     return newNote.id;
   };
 
+  const createNoteFromCopilot = (data: {
+    title: string;
+    content: string;
+    tags?: string[];
+    source?: string;
+    sourceNoteId?: string;
+    type?: ManualNoteType;
+  }): string => {
+    const now = new Date().toISOString();
+    const newId = `note-${Date.now()}`;
+    const cleanHtml = data.content || '<p></p>';
+    const excerpt = cleanTextForEmbedding(cleanHtml).slice(0, 180);
+    const hasSourceNote = Boolean(
+      data.sourceNoteId && notesRef.current.some((n) => n.id === data.sourceNoteId)
+    );
+
+    const newNote: Note = {
+      id: newId,
+      title: data.title.trim() || 'Catatan dari Ask Noesis',
+      content: cleanHtml,
+      excerpt,
+      type: data.type || 'thought',
+      tags: Array.from(new Set(['ask-noesis', ...(data.tags || [])])),
+      source: data.source,
+      favorite: false,
+      archived: false,
+      relatedNoteIds: hasSourceNote && data.sourceNoteId ? [data.sourceNoteId] : [],
+      createdAt: now,
+      updatedAt: now,
+    };
+
+    const sourceMatch = hasSourceNote
+      ? notesRef.current.find(
+          (n) => n.id === data.sourceNoteId && !n.relatedNoteIds.includes(newId)
+        )
+      : undefined;
+
+    const linkedSourceNote: Note | null = sourceMatch
+      ? {
+          ...sourceMatch,
+          relatedNoteIds: [...sourceMatch.relatedNoteIds, newId],
+          updatedAt: now,
+        }
+      : null;
+
+    const nextNotes = [
+      newNote,
+      ...notesRef.current.map((n) =>
+        linkedSourceNote && n.id === linkedSourceNote.id ? linkedSourceNote : n
+      ),
+    ];
+
+    notesRef.current = nextNotes;
+    setNotes(nextNotes);
+    dirtyEmbedNoteIdsRef.current.add(newId);
+
+    if (canRemoteSync() && authUserRef.current) {
+      const uid = authUserRef.current.id;
+      enqueueUpsertNote(uid, newId, now, true);
+      if (linkedSourceNote) {
+        enqueueUpsertNote(uid, linkedSourceNote.id, now, false);
+      }
+      if (isBrowserOnline()) {
+        upsertNoteToSupabase(newNote)
+          .then((ok) => {
+            if (ok && authUserRef.current?.id === uid) {
+              dequeueUpsertNote(uid, newId, now);
+            }
+          })
+          .catch(console.warn);
+        if (linkedSourceNote) {
+          const toSync = linkedSourceNote;
+          upsertNoteToSupabase(toSync)
+            .then((ok) => {
+              if (ok && authUserRef.current?.id === uid) {
+                dequeueUpsertNote(uid, toSync.id, now);
+              }
+            })
+            .catch(console.warn);
+        }
+      } else {
+        setSyncStatus('offline');
+      }
+    } else {
+      markOfflineDirtyIfLoggedOut();
+    }
+
+    return newId;
+  };
+
   const updateNote = (id: string, updates: Partial<Note>) => {
     const current = notesRef.current.find((n) => n.id === id);
     if (!current) return;
@@ -2212,10 +2312,13 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       setActiveNoteIdState(nextId);
     }
 
+    clearCopilotMessages(`note:${id}`);
+
     if (canRemoteSync() && authUserRef.current) {
       const uid = authUserRef.current.id;
       enqueueDeleteNote(uid, id);
       if (isBrowserOnline()) {
+        deleteCopilotChatFromSupabase(`note:${id}`).catch(console.warn);
         deleteNoteFromSupabase(id)
           .then((ok) => {
             if (ok && authUserRef.current?.id === uid) {
@@ -4733,6 +4836,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         notes,
         activeNote,
         createNote,
+        createNoteFromCopilot,
         updateNote,
         flushNoteSave,
         flushNoteOnExit,

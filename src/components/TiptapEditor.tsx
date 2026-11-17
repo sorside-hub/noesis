@@ -38,6 +38,7 @@ import {
   Loader2,
   Undo2,
   Redo2,
+  MessageSquareText,
 } from 'lucide-react';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
 import { fetchAllVectorEmbeddings, VectorMapResult } from '../lib/supabase';
@@ -157,6 +158,9 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   const [tagSuggestResult, setTagSuggestResult] = useState<TagSuggestionResult | null>(null);
   const [pendingTagSuggestions, setPendingTagSuggestions] = useState<string[]>([]);
   const [showAiSheet, setShowAiSheet] = useState(false);
+  const showAiSheetRef = React.useRef(false);
+  showAiSheetRef.current = showAiSheet;
+  const [aiInitialTab, setAiInitialTab] = useState<'edit' | 'ask'>('edit');
   const [aiSnapshot, setAiSnapshot] = useState<EditorAiSnapshot | null>(null);
   const [aiAutoRunAction, setAiAutoRunAction] = useState<WritingAssistAction | null>(null);
   const [slashTrigger, setSlashTrigger] = useState<SlashTriggerMatch | null>(null);
@@ -196,6 +200,7 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
     setTagSuggestResult(null);
     setPendingTagSuggestions([]);
     setShowAiSheet(false);
+    setAiInitialTab('edit');
     setAiSnapshot(null);
     setAiAutoRunAction(null);
     setSlashTrigger(null);
@@ -278,6 +283,9 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       } else {
         setDesktopSelectionCoords((prev) => (prev === null ? prev : null));
       }
+      if (showAiSheetRef.current) {
+        setAiSnapshot(captureEditorAiSnapshot(ed));
+      }
     },
     onUpdate: ({ editor }) => {
       setSlashTrigger(detectSlashCommandTrigger(editor));
@@ -345,12 +353,13 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
   }, [isKeyboardOpen, isEditorFocused, editor]);
 
   const openAiAssistant = useCallback(
-    (autoAction?: WritingAssistAction | null) => {
+    (autoAction?: WritingAssistAction | null, tab: 'edit' | 'ask' = 'edit') => {
       if (!editor || editor.isDestroyed) return;
       const snapshot = captureEditorAiSnapshot(editor);
       setSlashTrigger(null);
       setDesktopSelectionCoords(null);
       setAiSnapshot(snapshot);
+      setAiInitialTab(tab);
       setAiAutoRunAction(autoAction ?? null);
       setShowAiSheet(true);
       editor.commands.blur();
@@ -373,7 +382,13 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
       setSlashTrigger(null);
       setDesktopSelectionCoords(null);
       setAiSnapshot(snapshot);
-      setAiAutoRunAction(item.action === 'open_prompt' ? null : item.action);
+      if (item.action === 'open_ask') {
+        setAiInitialTab('ask');
+        setAiAutoRunAction(null);
+      } else {
+        setAiInitialTab('edit');
+        setAiAutoRunAction(item.action === 'open_prompt' ? null : item.action);
+      }
       setShowAiSheet(true);
       editor.commands.blur();
       if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
@@ -791,6 +806,28 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
                 </button>
               );
             })()}
+
+            {/* Ask Noesis Copilot Quick Trigger (accessible even when mobile keyboard is closed) */}
+            <button
+              type="button"
+              onClick={() => {
+                if (showAiSheet && aiInitialTab === 'ask') {
+                  setShowAiSheet(false);
+                } else {
+                  openAiAssistant(null, 'ask');
+                }
+              }}
+              aria-label="Ask Noesis Copilot"
+              title="Ask Noesis (Copilot)"
+              className={`px-2 py-1.5 rounded-lg transition-colors flex items-center gap-1 cursor-pointer ${
+                showAiSheet && aiInitialTab === 'ask'
+                  ? 'bg-[#9A3412] dark:bg-[#EA580C] text-white'
+                  : 'text-[#9A3412] dark:text-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 hover:bg-[#9A3412]/15 dark:hover:bg-[#EA580C]/25'
+              }`}
+            >
+              <MessageSquareText size={14} />
+              <span className="text-[11px] font-medium leading-none">Ask</span>
+            </button>
 
             {/* 1. Favorite Star (Berdiri Sendiri) */}
             <button
@@ -2201,19 +2238,25 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
         />
       )}
 
-      {/* AI Inline Writing Companion Sheet */}
+      {/* AI Inline Writing Companion + Ask Noesis Copilot Sheet */}
       <EditorAiSheet
         isOpen={showAiSheet}
         onClose={() => setShowAiSheet(false)}
         contextKind="note"
+        noteId={activeNote.id}
+        initialTab={aiInitialTab}
         snapshot={aiSnapshot}
+        getLatestSnapshot={() =>
+          editor && !editor.isDestroyed ? captureEditorAiSnapshot(editor) : null
+        }
         title={title}
         noteType={activeNote.type}
         autoRunAction={aiAutoRunAction}
         onConsumeAutoRun={() => setAiAutoRunAction(null)}
-        onApply={(html, applyMode) => {
-          if (editor && aiSnapshot) {
-            applyAiHtmlToEditor(editor, aiSnapshot, html, applyMode);
+        onApply={(html, applyMode, targetSnapshot) => {
+          const snap = targetSnapshot || aiSnapshot;
+          if (editor && snap) {
+            applyAiHtmlToEditor(editor, snap, html, applyMode);
           }
         }}
         overlayKey={`note-ai-sheet-${activeNote.id}`}

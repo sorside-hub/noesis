@@ -13,6 +13,8 @@ import {
   WritingAssistAction,
   WritingAssistResult,
   ProjectOutlineResult,
+  CopilotContextAttachment,
+  AskNoesisResult,
 } from '../types';
 import { cleanTextForEmbedding } from './cloudflareEmbedding';
 import { VectorMapResult } from './supabase';
@@ -787,4 +789,28 @@ export const requestProjectOutline = async (payload: {
   };
 };
 
+export const requestAskNoesis = async (payload: {
+  contextKind: 'note' | 'project';
+  title?: string;
+  noteType?: string;
+  projectTitle?: string;
+  sectionTitle?: string;
+  selectedText?: string;
+  documentText?: string;
+  attachments?: CopilotContextAttachment[];
+  messages: { role: 'user' | 'assistant'; text: string }[];
+}): Promise<AskNoesisResult> => {
+  const json = await postAiJson<any>(
+    '/api/ai/ask-noesis',
+    payload,
+    'Gagal menghubungi Ask Noesis.'
+  );
+
+  return {
+    reply: String(json?.result?.reply || ''),
+    modelUsed: json.modelUsed,
+    fallbackUsed: json.fallbackUsed,
+    aiTrace: json.aiTrace,
+  };
+};
 

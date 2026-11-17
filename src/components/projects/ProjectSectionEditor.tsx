@@ -86,6 +86,9 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
   const [showLinkDialog, setShowLinkDialog] = useState(false);
   const [linkUrl, setLinkUrl] = useState('');
   const [showAiSheet, setShowAiSheet] = useState(false);
+  const showAiSheetRef = useRef(false);
+  showAiSheetRef.current = showAiSheet;
+  const [aiInitialTab, setAiInitialTab] = useState<'edit' | 'ask'>('edit');
   const [aiSnapshot, setAiSnapshot] = useState<EditorAiSnapshot | null>(null);
   const [aiAutoRunAction, setAiAutoRunAction] = useState<WritingAssistAction | null>(null);
   const [slashTrigger, setSlashTrigger] = useState<SlashTriggerMatch | null>(null);
@@ -189,6 +192,9 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
         }
       } else {
         setDesktopSelectionCoords((prev) => (prev === null ? prev : null));
+      }
+      if (showAiSheetRef.current) {
+        setAiSnapshot(captureEditorAiSnapshot(ed));
       }
     },
     onUpdate: ({ editor: ed }) => {
@@ -330,12 +336,13 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
   }, [inlineMaster, isKeyboardOpen, isEditorFocused, editor]);
 
   const openAiAssistant = useCallback(
-    (autoAction?: WritingAssistAction | null) => {
+    (autoAction?: WritingAssistAction | null, tab: 'edit' | 'ask' = 'edit') => {
       if (!editor || editor.isDestroyed) return;
       const snapshot = captureEditorAiSnapshot(editor);
       setSlashTrigger(null);
       setDesktopSelectionCoords(null);
       setAiSnapshot(snapshot);
+      setAiInitialTab(tab);
       setAiAutoRunAction(autoAction ?? null);
       setShowAiSheet(true);
       editor.commands.blur();
@@ -358,7 +365,13 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
       setSlashTrigger(null);
       setDesktopSelectionCoords(null);
       setAiSnapshot(snapshot);
-      setAiAutoRunAction(item.action === 'open_prompt' ? null : item.action);
+      if (item.action === 'open_ask') {
+        setAiInitialTab('ask');
+        setAiAutoRunAction(null);
+      } else {
+        setAiInitialTab('edit');
+        setAiAutoRunAction(item.action === 'open_prompt' ? null : item.action);
+      }
       setShowAiSheet(true);
       editor.commands.blur();
       if (typeof document !== 'undefined' && document.activeElement instanceof HTMLElement) {
@@ -774,21 +787,27 @@ export const ProjectSectionEditor: React.FC<ProjectSectionEditorProps> = ({
         />
       )}
 
-      {/* AI Inline Writing Companion Sheet */}
+      {/* AI Inline Writing Companion + Ask Noesis Copilot Sheet */}
       <EditorAiSheet
         isOpen={showAiSheet}
         onClose={() => setShowAiSheet(false)}
         contextKind="project"
+        noteId={`project:${projectId}:${section.id}`}
+        initialTab={aiInitialTab}
         snapshot={aiSnapshot}
+        getLatestSnapshot={() =>
+          editor && !editor.isDestroyed ? captureEditorAiSnapshot(editor) : null
+        }
         title={title}
         projectTitle={projectTitle}
         sectionTitle={title || section.title}
         previousSectionSnippet={previousSectionSnippet}
         autoRunAction={aiAutoRunAction}
         onConsumeAutoRun={() => setAiAutoRunAction(null)}
-        onApply={(html, applyMode) => {
-          if (editor && aiSnapshot) {
-            applyAiHtmlToEditor(editor, aiSnapshot, html, applyMode);
+        onApply={(html, applyMode, targetSnapshot) => {
+          const snap = targetSnapshot || aiSnapshot;
+          if (editor && snap) {
+            applyAiHtmlToEditor(editor, snap, html, applyMode);
           }
         }}
         overlayKey={`project-ai-sheet-${projectId}-${section.id}`}

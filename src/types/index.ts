@@ -240,4 +240,29 @@ export interface ProjectOutlineResult {
   aiTrace?: AiExecutionTrace;
 }
 
+export interface CopilotContextAttachment {
+  id: string;
+  kind: 'note' | 'fragment';
+  title: string;
+  type?: string;
+  content: string;
+}
+
+export interface CopilotChatMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  text: string;
+  createdAt: string;
+  attachedTitles?: string[];
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
+}
+
+export interface AskNoesisResult {
+  reply: string;
+  modelUsed?: string;
+  fallbackUsed?: boolean;
+  aiTrace?: AiExecutionTrace;
+}
 
