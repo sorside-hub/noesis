@@ -61,6 +61,7 @@ import {
 } from './EditorAiAssistant';
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
 import { useBackOverlay } from '../hooks/useBackOverlay';
+import { MobileBottomSheet } from './MobileBottomSheet';
 import { useScrollRestoration } from '../hooks/useScrollRestoration';
 import { createTiptapClipboardProps, copyFormattedNoteToClipboard } from '../lib/tiptapClipboard';
 
@@ -1728,57 +1729,54 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
         </aside>
       )}
 
-      {/* Mobile Drawer Metadata (Bottom Sheet Modal) */}
-      {showMobileInspector && (
-        <div
-          onClick={() => setShowMobileInspector(false)}
-          className="md:hidden fixed inset-0 z-50 flex flex-col justify-end bg-black/40 backdrop-blur-xs"
-        >
-          <div
-            onClick={(e) => e.stopPropagation()}
-            className="bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t border-[#E8E2D8] dark:border-[#2F2B28] rounded-t-2xl h-[78vh] flex flex-col overflow-hidden animate-in slide-in-from-bottom duration-200"
-          >
-            {/* Fixed Header with Centered 2-Tab Switcher */}
-            <div className="px-3.5 sm:px-4 py-2.5 sm:py-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] grid grid-cols-[32px_1fr_32px] items-center shrink-0">
-              <div aria-hidden="true" />
-              <div className="flex justify-center">
-                <div className="inline-flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
-                  <button
-                    type="button"
-                    onClick={() => setInspectorTab('metadata')}
-                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                      inspectorTab === 'metadata'
-                        ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
-                        : 'text-[#6B635B] dark:text-[#A8A196]'
-                    }`}
-                  >
-                    Metadata
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setInspectorTab('related')}
-                    className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                      inspectorTab === 'related'
-                        ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
-                        : 'text-[#6B635B] dark:text-[#A8A196]'
-                    }`}
-                  >
-                    Related ({relatedNotes.length + relatedFragments.length})
-                  </button>
-                </div>
+      {/* Mobile Drawer Metadata & Related (Fixed Top-Anchored Sheet) */}
+      <MobileBottomSheet
+        isOpen={showMobileInspector}
+        onClose={() => setShowMobileInspector(false)}
+        ariaLabel="Metadata & Related"
+        desktopVariant="hidden"
+        header={
+          <div className="px-3.5 sm:px-4 py-2 sm:py-3 border-b border-[#E8E2D8] dark:border-[#2F2B28] grid grid-cols-[32px_1fr_32px] items-center shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+            <div aria-hidden="true" />
+            <div className="flex justify-center">
+              <div className="inline-flex items-center p-1 bg-[#F5EFEB] dark:bg-[#151413] rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28]">
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('metadata')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                    inspectorTab === 'metadata'
+                      ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                      : 'text-[#6B635B] dark:text-[#A8A196]'
+                  }`}
+                >
+                  Metadata
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setInspectorTab('related')}
+                  className={`px-3 py-1 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                    inspectorTab === 'related'
+                      ? 'bg-white dark:bg-[#272422] text-[#9A3412] dark:text-[#EA580C] shadow-xs'
+                      : 'text-[#6B635B] dark:text-[#A8A196]'
+                  }`}
+                >
+                  Related ({relatedNotes.length + relatedFragments.length})
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => setShowMobileInspector(false)}
-                className="p-1 text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] justify-self-end"
-                aria-label="Close drawer"
-              >
-                <X size={18} />
-              </button>
             </div>
-
+            <button
+              type="button"
+              onClick={() => setShowMobileInspector(false)}
+              className="p-1 text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] justify-self-end"
+              aria-label="Close drawer"
+            >
+              <X size={18} />
+            </button>
+          </div>
+        }
+      >
             {/* Scrollable Tab Content */}
-            <div className="flex-1 overflow-y-auto px-3.5 sm:px-5 py-3 sm:py-4">
+            <div className="flex-1 overflow-y-auto overscroll-contain px-3.5 sm:px-5 py-3 sm:py-4">
               {inspectorTab === 'metadata' ? (
                 <div className="space-y-4">
                   {/* 1. Note Type */}
@@ -2176,19 +2174,19 @@ export const TiptapEditor: React.FC<TiptapEditorProps> = () => {
               )}
             </div>
 
-            {/* Fixed Footer */}
-            <div className="px-3.5 sm:px-5 py-2.5 sm:py-3 border-t border-[#E8E2D8] dark:border-[#2F2B28] shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
-              <button
-                type="button"
-                onClick={() => setShowMobileInspector(false)}
-                className="w-full py-2.5 bg-[#9A3412] dark:bg-[#EA580C] text-white rounded-xl text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors"
-              >
-                Done
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+            {/* Fixed Footer (auto-hidden when virtual keyboard is open to maximize typing room) */}
+            {!isKeyboardOpen && (
+              <div className="px-3.5 sm:px-5 py-2.5 sm:py-3 pb-[max(0.625rem,env(safe-area-inset-bottom))] border-t border-[#E8E2D8] dark:border-[#2F2B28] shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+                <button
+                  type="button"
+                  onClick={() => setShowMobileInspector(false)}
+                  className="w-full py-2.5 bg-[#9A3412] dark:bg-[#EA580C] text-white rounded-xl text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors"
+                >
+                  Done
+                </button>
+              </div>
+            )}
+      </MobileBottomSheet>
 
       {/* Delete Confirmation Modal */}
       <DeleteConfirmModal

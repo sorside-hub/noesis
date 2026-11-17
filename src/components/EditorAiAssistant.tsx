@@ -49,6 +49,8 @@ import {
 } from '../lib/supabase';
 import { AiProcessBadge } from './discover/AiProcessBadge';
 import { useBackOverlay } from '../hooks/useBackOverlay';
+import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
+import { MobileBottomSheet } from './MobileBottomSheet';
 
 export interface EditorAiSnapshot {
   mode: WritingAssistMode;
@@ -562,10 +564,15 @@ export const EditorAiSheet: React.FC<EditorAiSheetProps> = ({
   const askSeqRef = useRef(0);
   const sessionSyncSeqRef = useRef(0);
   const lastSelectedTextRef = useRef<string>('');
+  const lastSnapshotRef = useRef<EditorAiSnapshot | null>(snapshot);
+  if (snapshot) {
+    lastSnapshotRef.current = snapshot;
+  }
   const inputRef = useRef<HTMLInputElement | null>(null);
   const askInputRef = useRef<HTMLTextAreaElement | null>(null);
   const chatScrollRef = useRef<HTMLDivElement | null>(null);
 
+  const isKeyboardOpen = useVirtualKeyboardOpen();
   useBackOverlay(isOpen && !isLoading && !isAskLoading, onClose, overlayKey);
 
   const persistChatUpdate = (nextMessages: CopilotChatMessage[], targetKey = sessionKey) => {
@@ -669,16 +676,20 @@ export const EditorAiSheet: React.FC<EditorAiSheetProps> = ({
     return () => window.removeEventListener('noesis-copilot-sync', handleCopilotSync);
   }, [sessionKey, isSupabaseConnected, authUser]);
 
-  // Auto-scroll chat to latest message when Ask tab is visible
+  // Auto-scroll chat to latest message when Ask tab is visible or mobile keyboard opens
   useEffect(() => {
     if (!isOpen || activeTab !== 'ask') return;
     const el = chatScrollRef.current;
-    if (el) {
-      requestAnimationFrame(() => {
-        el.scrollTop = el.scrollHeight;
-      });
+    if (!el) return;
+    const scrollBottom = () => {
+      el.scrollTop = el.scrollHeight;
+    };
+    requestAnimationFrame(scrollBottom);
+    if (isKeyboardOpen) {
+      const t = setTimeout(scrollBottom, 210);
+      return () => clearTimeout(t);
     }
-  }, [isOpen, activeTab, chatMessages.length, isAskLoading]);
+  }, [isOpen, activeTab, chatMessages.length, isAskLoading, isKeyboardOpen]);
 
   // Reset transient UI state whenever drawer opens fresh
   useEffect(() => {
@@ -976,15 +987,16 @@ export const EditorAiSheet: React.FC<EditorAiSheetProps> = ({
     setSavedNoteByMsgId((prev) => ({ ...prev, [msg.id]: newNoteId }));
   };
 
-  if (!isOpen || !snapshot) return null;
+  const activeSnapshot = snapshot || lastSnapshotRef.current;
+  const isSheetOpen = Boolean(isOpen && snapshot);
 
-  const isSelectionMode = snapshot.mode === 'selection';
+  const isSelectionMode = activeSnapshot?.mode === 'selection';
   const presets = isSelectionMode ? SELECTION_PRESETS : CURSOR_PRESETS;
-  const selectedWordCount = snapshot.selectedText
-    ? snapshot.selectedText.split(/\s+/).filter(Boolean).length
+  const selectedWordCount = activeSnapshot?.selectedText
+    ? activeSnapshot.selectedText.split(/\s+/).filter(Boolean).length
     : 0;
 
-  const rawSelectedText = snapshot.selectedText?.trim() || '';
+  const rawSelectedText = activeSnapshot?.selectedText?.trim() || '';
   const effectiveAskSelectedText = !selectionDismissed ? rawSelectedText : '';
   const isAskSelectionFocus = effectiveAskSelectedText.length > 0;
   const askSelectedWordCount = effectiveAskSelectedText
@@ -1006,110 +1018,101 @@ export const EditorAiSheet: React.FC<EditorAiSheetProps> = ({
 
   const isAskTab = activeTab === 'ask';
 
-  return (
-    <div
-      className={`fixed inset-0 z-50 flex items-end justify-center transition-colors ${
-        isAskTab
-          ? 'bg-black/45 backdrop-blur-[2px] md:bg-transparent md:backdrop-blur-none md:justify-end md:pointer-events-none'
-          : 'md:items-center md:p-4 bg-black/45 backdrop-blur-[2px] animate-in fade-in duration-150'
-      }`}
-      onClick={() => {
-        if (!isLoading && !isAskLoading) onClose();
-      }}
-    >
-      <div
-        role="dialog"
-        aria-modal={!isAskTab ? 'true' : undefined}
-        aria-label={isAskTab ? 'Ask Noesis Copilot' : 'AI Pendamping Menulis'}
-        onClick={(e) => e.stopPropagation()}
-        className={`pointer-events-auto w-full bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t md:border border-[#E8E2D8] dark:border-[#2F2B28] shadow-2xl flex flex-col overflow-hidden ${
-          isAskTab
-            ? 'h-[86dvh] max-h-[88dvh] rounded-t-2xl md:h-full md:max-h-none md:w-[400px] lg:w-[440px] md:rounded-none md:border-t-0 md:border-r-0 md:border-b-0 animate-in slide-in-from-bottom md:slide-in-from-right duration-150'
-            : 'md:max-w-xl max-h-[82vh] md:max-h-[84vh] rounded-t-2xl md:rounded-2xl animate-in slide-in-from-bottom md:zoom-in-95 duration-150'
-        }`}
-      >
-        {/* Header with 2-Tab Switcher (Edit | Ask Noesis) */}
-        <div className="px-3 sm:px-4 py-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/90 dark:bg-[#151413] flex items-center justify-between gap-2 shrink-0">
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-7 h-7 rounded-lg bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center shrink-0">
-              {isAskTab ? <MessageSquareText size={14} /> : <Sparkles size={14} />}
-            </div>
-
-            <div className="inline-flex items-center p-0.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28]">
-              <button
-                type="button"
-                onClick={() => setActiveTab('edit')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 cursor-pointer ${
-                  activeTab === 'edit'
-                    ? 'bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-2xs'
-                    : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
-                }`}
-              >
-                <Wand2 size={11} />
-                <span>Edit</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab('ask')}
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 cursor-pointer ${
-                  activeTab === 'ask'
-                    ? 'bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-2xs'
-                    : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
-                }`}
-              >
-                <MessageSquareText size={11} />
-                <span>Ask Noesis</span>
-              </button>
-            </div>
-
-            {!isAskTab && (
-              <span className="hidden sm:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]">
-                {isSelectionMode
-                  ? `Blok · ${selectedWordCount} kata`
-                  : contextKind === 'project'
-                  ? 'Seluruh Bagian'
-                  : 'Seluruh Catatan'}
-              </span>
-            )}
-            {!isAskTab && result && (
-              <AiProcessBadge
-                featureName="AI Pendamping Editor"
-                modelUsed={result.modelUsed}
-                fallbackUsed={result.fallbackUsed}
-                aiTrace={result.aiTrace}
-                overlayKey={`${overlayKey}-trace`}
-              />
-            )}
-          </div>
-
-          <div className="flex items-center gap-1 shrink-0">
-            {isAskTab && chatMessages.length > 0 && (
-              <button
-                type="button"
-                disabled={isAskLoading}
-                onClick={handleDeleteChat}
-                title="Hapus riwayat chat Ask Noesis secara permanen"
-                className={`px-2 py-1 rounded-lg text-[11px] font-medium disabled:opacity-45 transition-colors inline-flex items-center gap-1 cursor-pointer ${
-                  confirmDeleteChat
-                    ? 'bg-red-600 text-white hover:bg-red-700'
-                    : 'text-[#6B635B] dark:text-[#A8A196] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30'
-                }`}
-              >
-                <Trash2 size={12} />
-                <span>{confirmDeleteChat ? 'Hapus?' : 'Hapus Chat'}</span>
-              </button>
-            )}
-            <button
-              type="button"
-              disabled={isLoading || isAskLoading}
-              onClick={onClose}
-              aria-label="Tutup AI Panel"
-              className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors cursor-pointer"
-            >
-              <X size={17} />
-            </button>
-          </div>
+  const sheetHeader = (
+    <div className="px-3 sm:px-4 py-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB]/90 dark:bg-[#151413] flex items-center justify-between gap-2 shrink-0">
+      <div className="flex items-center gap-2 min-w-0">
+        <div className="w-7 h-7 rounded-lg bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center shrink-0">
+          {isAskTab ? <MessageSquareText size={14} /> : <Sparkles size={14} />}
         </div>
+
+        <div className="inline-flex items-center p-0.5 rounded-xl bg-white dark:bg-[#1E1C1A] border border-[#E8E2D8] dark:border-[#2F2B28]">
+          <button
+            type="button"
+            onClick={() => setActiveTab('edit')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 cursor-pointer ${
+              activeTab === 'edit'
+                ? 'bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-2xs'
+                : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+            }`}
+          >
+            <Wand2 size={11} />
+            <span>Edit</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('ask')}
+            className={`px-2.5 py-1 rounded-lg text-xs font-medium transition-colors flex items-center gap-1 cursor-pointer ${
+              activeTab === 'ask'
+                ? 'bg-[#9A3412] dark:bg-[#EA580C] text-white shadow-2xs'
+                : 'text-[#6B635B] dark:text-[#A8A196] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]'
+            }`}
+          >
+            <MessageSquareText size={11} />
+            <span>Ask Noesis</span>
+          </button>
+        </div>
+
+        {!isAskTab && (
+          <span className="hidden sm:inline text-[10px] font-mono px-1.5 py-0.5 rounded bg-white dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#2F2B28] text-[#6B635B] dark:text-[#A8A196]">
+            {isSelectionMode
+              ? `Blok · ${selectedWordCount} kata`
+              : contextKind === 'project'
+              ? 'Seluruh Bagian'
+              : 'Seluruh Catatan'}
+          </span>
+        )}
+        {!isAskTab && result && (
+          <AiProcessBadge
+            featureName="AI Pendamping Editor"
+            modelUsed={result.modelUsed}
+            fallbackUsed={result.fallbackUsed}
+            aiTrace={result.aiTrace}
+            overlayKey={`${overlayKey}-trace`}
+          />
+        )}
+      </div>
+
+      <div className="flex items-center gap-1 shrink-0">
+        {isAskTab && chatMessages.length > 0 && (
+          <button
+            type="button"
+            disabled={isAskLoading}
+            onClick={handleDeleteChat}
+            title="Hapus riwayat chat Ask Noesis secara permanen"
+            className={`px-2 py-1 rounded-lg text-[11px] font-medium disabled:opacity-45 transition-colors inline-flex items-center gap-1 cursor-pointer ${
+              confirmDeleteChat
+                ? 'bg-red-600 text-white hover:bg-red-700'
+                : 'text-[#6B635B] dark:text-[#A8A196] hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30'
+            }`}
+          >
+            <Trash2 size={12} />
+            <span>{confirmDeleteChat ? 'Hapus?' : 'Hapus Chat'}</span>
+          </button>
+        )}
+        <button
+          type="button"
+          disabled={isLoading || isAskLoading}
+          onClick={onClose}
+          aria-label="Tutup AI Panel"
+          className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] hover:bg-[#ECE4DC] dark:hover:bg-[#272422] disabled:opacity-50 transition-colors cursor-pointer"
+        >
+          <X size={17} />
+        </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <MobileBottomSheet
+      isOpen={isSheetOpen}
+      onClose={onClose}
+      ariaLabel={isAskTab ? 'Ask Noesis Copilot' : 'AI Pendamping Menulis'}
+      disableDismiss={isLoading || isAskLoading}
+      desktopVariant={isAskTab ? 'side-right' : 'modal'}
+      backdropPointerEventsNoneOnDesktop={isAskTab}
+      desktopClassName={isAskTab ? 'md:w-[400px] lg:w-[440px]' : 'md:max-w-xl'}
+      header={sheetHeader}
+    >
 
         {/* ================================================================
             TAB 1: EDIT / WRITE ASSISTANT
@@ -1123,7 +1126,7 @@ export const EditorAiSheet: React.FC<EditorAiSheetProps> = ({
                     Teks terpilih ({selectedWordCount} kata)
                   </span>
                   <p className="text-xs text-[#6B635B] dark:text-[#A8A196] line-clamp-2 italic leading-relaxed">
-                    “{snapshot.selectedText}”
+                    “{activeSnapshot?.selectedText || ''}”
                   </p>
                 </div>
               )}
@@ -1642,7 +1645,6 @@ export const EditorAiSheet: React.FC<EditorAiSheetProps> = ({
             </form>
           </>
         )}
-      </div>
-    </div>
+    </MobileBottomSheet>
   );
 };

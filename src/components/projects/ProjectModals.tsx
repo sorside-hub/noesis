@@ -13,6 +13,7 @@ import {
   ChevronDown,
   ChevronUp,
 } from 'lucide-react';
+import { MobileBottomSheet } from '../MobileBottomSheet';
 
 interface ProjectFormModalProps {
   isOpen: boolean;
@@ -59,8 +60,6 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
     }
   }, [isOpen, editingProject]);
 
-  if (!isOpen) return null;
-
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!title.trim()) return;
@@ -78,22 +77,30 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/45 backdrop-blur-xs">
-      <div className="w-full sm:max-w-lg bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t sm:border border-[#E8E2D8] dark:border-[#2F2B28] rounded-t-2xl sm:rounded-2xl shadow-xl p-4 sm:p-6 max-h-[90vh] overflow-y-auto space-y-4">
-        <div className="flex items-center justify-between border-b border-[#E8E2D8] dark:border-[#2F2B28] pb-3">
+    <MobileBottomSheet
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel={editingProject ? 'Pengaturan Project' : 'Buat Project Baru'}
+      desktopVariant="modal"
+      desktopClassName="md:max-w-lg"
+      header={
+        <div className="px-4 py-3 sm:px-5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
           <h3 className="font-serif text-lg sm:text-xl font-medium text-[#221F1D] dark:text-[#EDE8E1]">
             {editingProject ? 'Pengaturan Project' : 'Buat Project Baru'}
           </h3>
           <button
             type="button"
             onClick={onClose}
+            aria-label="Tutup"
             className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]"
           >
             <X size={16} />
           </button>
         </div>
-
-        <form onSubmit={handleSubmit} className="space-y-3.5">
+      }
+    >
+      <form onSubmit={handleSubmit} className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-3.5">
           <div>
             <label className="block text-[11px] font-mono uppercase tracking-wider text-[#9C9388] mb-1">
               Nama Project
@@ -105,7 +112,7 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
               onChange={(e) => setTitle(e.target.value)}
               placeholder="Misal: Esai Bias Kognitif, Skripsi Bab 2, Belajar Sistem Terdistribusi..."
               className="w-full text-xs sm:text-sm px-3 py-2.5 rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C]"
-              autoFocus
+              autoFocus={typeof window !== 'undefined' && window.innerWidth >= 768}
             />
           </div>
 
@@ -246,24 +253,25 @@ export const ProjectFormModal: React.FC<ProjectFormModalProps> = ({
             </div>
           )}
 
-          <div className="pt-2 flex justify-end gap-2 border-t border-[#E8E2D8] dark:border-[#2F2B28]">
-            <button
-              type="button"
-              onClick={onClose}
-              className="px-3.5 py-2 text-xs text-[#6B635B] dark:text-[#A8A196] hover:underline"
-            >
-              Batal
-            </button>
-            <button
-              type="submit"
-              className="px-4 py-2 bg-[#9A3412] dark:bg-[#EA580C] text-white rounded-xl text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors"
-            >
-              {editingProject ? 'Simpan Perubahan' : 'Buat Project'}
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+        </div>
+
+        <div className="px-4 py-3 sm:px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] flex justify-end gap-2 border-t border-[#E8E2D8] dark:border-[#2F2B28] shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+          <button
+            type="button"
+            onClick={onClose}
+            className="px-3.5 py-2 text-xs text-[#6B635B] dark:text-[#A8A196] hover:underline"
+          >
+            Batal
+          </button>
+          <button
+            type="submit"
+            className="px-4 py-2 bg-[#9A3412] dark:bg-[#EA580C] text-white rounded-xl text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] transition-colors"
+          >
+            {editingProject ? 'Simpan Perubahan' : 'Buat Project'}
+          </button>
+        </div>
+      </form>
+    </MobileBottomSheet>
   );
 };
 
@@ -349,66 +357,72 @@ export const LinkMaterialsModal: React.FC<LinkMaterialsModalProps> = ({
     return list;
   }, [notes, fragments, noteIdSet, fragIdSet, query, kindFilter]);
 
-  if (!isOpen) return null;
-
   return (
-    <div className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/45 backdrop-blur-xs">
-      <div className="w-full sm:max-w-xl bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t sm:border border-[#E8E2D8] dark:border-[#2F2B28] rounded-t-2xl sm:rounded-2xl shadow-xl flex flex-col max-h-[88vh]">
-        <div className="p-3.5 sm:p-5 border-b border-[#E8E2D8] dark:border-[#2F2B28] space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <div>
-              <h3 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
-                Pilih Bahan untuk Project
-              </h3>
-              <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196]">
-                Tautkan Catatan, Dokumen Synthesis, atau Fragment tanpa menduplikasi file.
-              </p>
-            </div>
-            <button
-              type="button"
-              onClick={onClose}
-              className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1]"
-            >
-              <X size={16} />
-            </button>
+    <MobileBottomSheet
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="Pilih Bahan untuk Project"
+      desktopVariant="modal"
+      desktopClassName="md:max-w-xl"
+      header={
+        <div className="px-4 py-3 sm:px-5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+          <div className="min-w-0">
+            <h3 className="font-serif text-base sm:text-lg font-medium text-[#221F1D] dark:text-[#EDE8E1]">
+              Pilih Bahan untuk Project
+            </h3>
+            <p className="text-[11px] text-[#6B635B] dark:text-[#A8A196] truncate">
+              Tautkan Catatan, Dokumen Synthesis, atau Fragment tanpa menduplikasi file.
+            </p>
           </div>
-
-          <div className="relative">
-            <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9C9388]" />
-            <input
-              type="text"
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Cari judul, isi, atau #tag..."
-              className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C]"
-              autoFocus
-            />
-          </div>
-
-          <div className="flex flex-wrap items-center gap-1.5">
-            {[
-              { id: 'all', label: 'Semua' },
-              { id: 'note', label: 'Catatan' },
-              { id: 'synthesis', label: 'Synthesis' },
-              { id: 'fragment', label: 'Fragments' },
-            ].map((tab) => (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setKindFilter(tab.id as any)}
-                className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
-                  kindFilter === tab.id
-                    ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
-                    : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#6B635B] dark:text-[#A8A196]'
-                }`}
-              >
-                {tab.label}
-              </button>
-            ))}
-          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Tutup"
+            className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] shrink-0"
+          >
+            <X size={16} />
+          </button>
+        </div>
+      }
+    >
+      {/* Search + Filter Sub-bar (always pinned cleanly under header) */}
+      <div className="px-3.5 sm:px-5 py-2.5 border-b border-[#E8E2D8]/80 dark:border-[#2F2B28] space-y-2.5 shrink-0 bg-white/40 dark:bg-[#191715]">
+        <div className="relative">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-[#9C9388]" />
+          <input
+            type="text"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            placeholder="Cari judul, isi, atau #tag..."
+            className="w-full pl-8 pr-3 py-2 text-xs rounded-xl border border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#221F1D] dark:text-[#EDE8E1] focus:outline-none focus:border-[#9A3412] dark:focus:border-[#EA580C]"
+            autoFocus={typeof window !== 'undefined' && window.innerWidth >= 768}
+          />
         </div>
 
-        <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          {[
+            { id: 'all', label: 'Semua' },
+            { id: 'note', label: 'Catatan' },
+            { id: 'synthesis', label: 'Synthesis' },
+            { id: 'fragment', label: 'Fragments' },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setKindFilter(tab.id as any)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium border transition-colors ${
+                kindFilter === tab.id
+                  ? 'border-[#9A3412] dark:border-[#EA580C] bg-[#9A3412]/10 dark:bg-[#EA580C]/15 text-[#9A3412] dark:text-[#EA580C]'
+                  : 'border-[#E8E2D8] dark:border-[#2F2B28] bg-white dark:bg-[#221F1E] text-[#6B635B] dark:text-[#A8A196]'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto overscroll-contain p-3 sm:p-4 space-y-2">
           {items.length === 0 ? (
             <div className="py-10 text-center text-xs text-[#9C9388]">
               Tidak ada materi yang cocok dengan filter ini.
@@ -467,19 +481,18 @@ export const LinkMaterialsModal: React.FC<LinkMaterialsModalProps> = ({
           )}
         </div>
 
-        <div className="p-3 sm:p-4 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between">
-          <span className="text-[11px] font-mono text-[#9C9388]">
-            {project.noteIds.length} catatan · {(project.fragmentIds || []).length} fragments tertaut
-          </span>
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E]"
-          >
-            Selesai
-          </button>
-        </div>
+      <div className="px-3.5 py-3 sm:px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+        <span className="text-[11px] font-mono text-[#9C9388]">
+          {project.noteIds.length} catatan · {(project.fragmentIds || []).length} fragments tertaut
+        </span>
+        <button
+          type="button"
+          onClick={onClose}
+          className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E]"
+        >
+          Selesai
+        </button>
       </div>
-    </div>
+    </MobileBottomSheet>
   );
 };

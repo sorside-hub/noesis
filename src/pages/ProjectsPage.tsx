@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useNoesis } from '../context/NoesisContext';
 import { useBackOverlay } from '../hooks/useBackOverlay';
 import { useScrollRestoration } from '../hooks/useScrollRestoration';
@@ -35,6 +35,7 @@ import {
 } from '../components/projects/ProjectModals';
 import { ProjectOutlineModal } from '../components/projects/ProjectOutlineModal';
 import { DeleteConfirmModal } from '../components/DeleteConfirmModal';
+import { MobileBottomSheet } from '../components/MobileBottomSheet';
 import {
   FolderKanban,
   Plus,
@@ -367,6 +368,12 @@ export const ProjectsPage: React.FC = () => {
   const desktopRefReaderMaterial = resolveMaterial(desktopRefReaderKey);
   const mobileRefReaderMaterial = resolveMaterial(mobileRefReaderKey);
   const mobileQuickRefMaterial = resolveMaterial(mobileQuickRefReaderKey);
+
+  const lastMobileRefReaderMaterialRef = useRef<ProjectSelectedMaterial | null>(null);
+  if (mobileRefReaderMaterial) {
+    lastMobileRefReaderMaterialRef.current = mobileRefReaderMaterial;
+  }
+  const activeReaderMaterial = mobileRefReaderMaterial || lastMobileRefReaderMaterialRef.current;
 
   const showTempNotice = (msg: string) => {
     setStudioNotice(msg);
@@ -1267,54 +1274,68 @@ export const ProjectsPage: React.FC = () => {
         )}
 
         {/* MOBILE QUICK-PEEK REFERENCE SHEET INSIDE SECTION EDITOR */}
-        {showMobileQuickRefSheet && (
-          <div className="lg:hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex flex-col justify-end">
-            <div className="w-full h-[86vh] bg-[#FAF7F2] dark:bg-[#151413] rounded-t-2xl overflow-hidden shadow-2xl flex flex-col">
-              <div className="px-3 py-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between">
-                <span className="text-xs font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C]">
-                  Intip Referensi · {activeSection?.title || 'Bagian'}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowMobileQuickRefSheet(false);
-                    setMobileQuickRefReaderKey(null);
-                  }}
-                  className="p-1.5 rounded-lg text-[#6B635B] dark:text-[#A8A196]"
-                >
-                  <X size={16} />
-                </button>
-              </div>
-              <div className="flex-1 overflow-hidden p-2">
-                {mobileQuickRefMaterial ? (
-                  <ProjectMaterialReader
-                    selected={mobileQuickRefMaterial}
-                    compact
-                    onBack={() => setMobileQuickRefReaderKey(null)}
-                    backLabel="Daftar Bahan"
-                    onInsertToSection={handleInsertMaterialToActiveSection}
-                    onEdit={handleEditMaterialInOrigin}
-                  />
-                ) : (
-                  <div className="h-full overflow-y-auto">
-                    {renderReferencesList(
-                      (kind, id) => setMobileQuickRefReaderKey({ kind, id }),
-                      true,
-                      false
-                    )}
-                  </div>
+        <MobileBottomSheet
+          isOpen={showMobileQuickRefSheet}
+          onClose={() => {
+            setShowMobileQuickRefSheet(false);
+            setMobileQuickRefReaderKey(null);
+          }}
+          ariaLabel="Intip Referensi"
+          mobileBreakpoint="lg"
+          desktopVariant="hidden"
+          header={
+            <div className="px-3.5 py-2.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+              <span className="text-xs font-mono uppercase tracking-wider text-[#9A3412] dark:text-[#EA580C] truncate">
+                Intip Referensi · {activeSection?.title || 'Bagian'}
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowMobileQuickRefSheet(false);
+                  setMobileQuickRefReaderKey(null);
+                }}
+                aria-label="Tutup Intip Referensi"
+                className="p-1.5 rounded-lg text-[#6B635B] dark:text-[#A8A196]"
+              >
+                <X size={16} />
+              </button>
+            </div>
+          }
+        >
+          <div className="flex-1 min-h-0 overflow-hidden p-2 bg-[#FAF7F2] dark:bg-[#151413]">
+            {mobileQuickRefMaterial ? (
+              <ProjectMaterialReader
+                selected={mobileQuickRefMaterial}
+                compact
+                onBack={() => setMobileQuickRefReaderKey(null)}
+                backLabel="Daftar Bahan"
+                onInsertToSection={handleInsertMaterialToActiveSection}
+                onEdit={handleEditMaterialInOrigin}
+              />
+            ) : (
+              <div className="h-full overflow-y-auto overscroll-contain">
+                {renderReferencesList(
+                  (kind, id) => setMobileQuickRefReaderKey({ kind, id }),
+                  true,
+                  false
                 )}
               </div>
-            </div>
+            )}
           </div>
-        )}
+        </MobileBottomSheet>
 
         {/* MOBILE QUICK READER SHEET (from Referensi tab) */}
-        {mobileRefReaderMaterial && (
-          <div className="lg:hidden fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex flex-col justify-end">
-            <div className="w-full h-[92vh] bg-[#FAF7F2] dark:bg-[#151413] rounded-t-2xl overflow-hidden shadow-2xl p-2">
+        <MobileBottomSheet
+          isOpen={Boolean(mobileRefReaderMaterial)}
+          onClose={() => setMobileRefReaderKey(null)}
+          ariaLabel="Baca Referensi"
+          mobileBreakpoint="lg"
+          desktopVariant="hidden"
+        >
+          <div className="flex-1 min-h-0 overflow-hidden p-2 bg-[#FAF7F2] dark:bg-[#151413]">
+            {activeReaderMaterial && (
               <ProjectMaterialReader
-                selected={mobileRefReaderMaterial}
+                selected={activeReaderMaterial}
                 compact
                 onInsertToSection={handleInsertMaterialToActiveSection}
                 onEdit={handleEditMaterialInOrigin}
@@ -1324,9 +1345,9 @@ export const ProjectsPage: React.FC = () => {
                 }}
                 onClose={() => setMobileRefReaderKey(null)}
               />
-            </div>
+            )}
           </div>
-        )}
+        </MobileBottomSheet>
 
         {/* Modals */}
         <ProjectFormModal

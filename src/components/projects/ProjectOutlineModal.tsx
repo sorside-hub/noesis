@@ -20,6 +20,7 @@ import {
   AlertCircle,
   Plus,
 } from 'lucide-react';
+import { MobileBottomSheet } from '../MobileBottomSheet';
 
 interface EditableOutlineItem {
   id: string;
@@ -77,8 +78,6 @@ export const ProjectOutlineModal: React.FC<ProjectOutlineModalProps> = ({
     setIncludeGuidanceInBody(false);
     setReplaceEmpty(!hasAnyWrittenSection);
   }, [isOpen, project.id, hasAnyWrittenSection]);
-
-  if (!isOpen) return null;
 
   const handleGenerate = async () => {
     if (isLoading) return;
@@ -149,16 +148,15 @@ export const ProjectOutlineModal: React.FC<ProjectOutlineModalProps> = ({
   };
 
   return (
-    <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center p-0 sm:p-4 bg-black/45 backdrop-blur-xs"
-      onClick={onClose}
-    >
-      <div
-        className="w-full sm:max-w-xl bg-[#FAF7F2] dark:bg-[#1E1C1A] border-t sm:border border-[#E8E2D8] dark:border-[#2F2B28] rounded-t-2xl sm:rounded-2xl shadow-xl flex flex-col max-h-[90vh] overflow-hidden"
-        onClick={(e) => e.stopPropagation()}
-      >
-        {/* Header */}
-        <div className="px-4 py-3 sm:px-5 sm:py-3.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 shrink-0">
+    <MobileBottomSheet
+      isOpen={isOpen}
+      onClose={onClose}
+      ariaLabel="AI Susun Kerangka"
+      disableDismiss={isLoading}
+      desktopVariant="modal"
+      desktopClassName="md:max-w-xl"
+      header={
+        <div className="px-4 py-3 sm:px-5 sm:py-3.5 border-b border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-between gap-2 shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
           <div className="flex items-center gap-2 min-w-0">
             <div className="w-7 h-7 rounded-lg bg-[#9A3412]/10 dark:bg-[#EA580C]/20 text-[#9A3412] dark:text-[#EA580C] flex items-center justify-center shrink-0">
               <Sparkles size={14} />
@@ -175,16 +173,18 @@ export const ProjectOutlineModal: React.FC<ProjectOutlineModalProps> = ({
 
           <button
             type="button"
+            disabled={isLoading}
             onClick={onClose}
-            className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] shrink-0"
+            className="p-1.5 rounded-lg text-[#9C9388] hover:text-[#221F1D] dark:hover:text-[#EDE8E1] disabled:opacity-45 shrink-0"
             aria-label="Tutup"
           >
             <X size={16} />
           </button>
         </div>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto p-4 sm:p-5 space-y-4">
+      }
+    >
+      {/* Body */}
+      <div className="flex-1 overflow-y-auto overscroll-contain p-4 sm:p-5 space-y-4">
           {/* Context summary */}
           <div className="p-3 rounded-xl bg-white dark:bg-[#221F1E] border border-[#E8E2D8] dark:border-[#2F2B28] space-y-1.5">
             <div className="text-xs font-medium text-[#221F1D] dark:text-[#EDE8E1] line-clamp-1">
@@ -382,28 +382,28 @@ export const ProjectOutlineModal: React.FC<ProjectOutlineModalProps> = ({
           )}
         </div>
 
-        {/* Footer */}
-        <div className="px-4 py-3 sm:px-5 border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-end gap-2 shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+      {/* Footer */}
+      <div className="px-4 py-3 sm:px-5 pb-[max(0.75rem,env(safe-area-inset-bottom))] border-t border-[#E8E2D8] dark:border-[#2F2B28] flex items-center justify-end gap-2 shrink-0 bg-[#FAF7F2] dark:bg-[#1E1C1A]">
+        <button
+          type="button"
+          disabled={isLoading}
+          onClick={onClose}
+          className="px-3.5 py-2 text-xs text-[#6B635B] dark:text-[#A8A196] hover:underline disabled:opacity-45"
+        >
+          Batal
+        </button>
+        {result && (
           <button
             type="button"
-            onClick={onClose}
-            className="px-3.5 py-2 text-xs text-[#6B635B] dark:text-[#A8A196] hover:underline"
+            onClick={handleApply}
+            disabled={selectedItems.length === 0}
+            className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-45 transition-colors flex items-center gap-1.5"
           >
-            Batal
+            <Plus size={13} />
+            <span>Terapkan {selectedItems.length} Bagian</span>
           </button>
-          {result && (
-            <button
-              type="button"
-              onClick={handleApply}
-              disabled={selectedItems.length === 0}
-              className="px-4 py-2 rounded-xl bg-[#9A3412] dark:bg-[#EA580C] text-white text-xs font-medium hover:bg-[#78280E] dark:hover:bg-[#C2410C] disabled:opacity-45 transition-colors flex items-center gap-1.5"
-            >
-              <Plus size={13} />
-              <span>Terapkan {selectedItems.length} Bagian</span>
-            </button>
-          )}
-        </div>
+        )}
       </div>
-    </div>
+    </MobileBottomSheet>
   );
 };
