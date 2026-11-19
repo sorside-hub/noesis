@@ -5,7 +5,6 @@ import { StreamColumn } from './components/StreamColumn';
 import { TiptapEditor } from './components/TiptapEditor';
 import { MobileNav } from './components/MobileNav';
 import { FragmentDrawer } from './components/FragmentDrawer';
-import { HomePage } from './pages/HomePage';
 import { FragmentsPage } from './pages/FragmentsPage';
 import { LibraryPage } from './pages/LibraryPage';
 import { DiscoverPage } from './pages/DiscoverPage';
@@ -126,7 +125,7 @@ const WorkspaceShell: React.FC = () => {
                 <Menu size={20} />
               </button>
               <span
-                onClick={() => selectTab('home')}
+                onClick={() => selectTab('library')}
                 className="font-serif text-xl font-medium tracking-tight text-[#221F1D] dark:text-[#EDE8E1] cursor-pointer"
               >
                 Noesis
@@ -177,8 +176,6 @@ const WorkspaceShell: React.FC = () => {
                 <TiptapEditor />
               </div>
             </div>
-          ) : activeView === 'home' ? (
-            <HomePage />
           ) : activeView === 'fragments' || activeView === 'capture' ? (
             <FragmentsPage />
           ) : activeView === 'library' ? (
@@ -190,7 +187,7 @@ const WorkspaceShell: React.FC = () => {
           ) : activeView === 'settings' ? (
             <SettingsPage />
           ) : (
-            <HomePage />
+            <LibraryPage />
           )}
         </div>
 

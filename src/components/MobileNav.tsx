@@ -3,7 +3,7 @@ import { useNoesis } from '../context/NoesisContext';
 import { useVirtualKeyboardOpen } from '../hooks/useVirtualKeyboardOpen';
 import { useBackOverlay } from '../hooks/useBackOverlay';
 import { ViewMode } from '../types';
-import { Compass, Feather, BookOpen, FolderKanban, Sparkles, Edit3, X } from 'lucide-react';
+import { Feather, BookOpen, FolderKanban, Sparkles, Edit3, X } from 'lucide-react';
 
 export const MobileNav: React.FC = () => {
   const { activeView, setActiveView, selectTab, openFragmentDrawer, createNote, setActiveNoteId } = useNoesis();
@@ -26,7 +26,6 @@ export const MobileNav: React.FC = () => {
   }, [activeView]);
 
   const navItems: { view: ViewMode; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
-    { view: 'home', label: 'Home', icon: Compass },
     { view: 'library', label: 'Library', icon: BookOpen },
     { view: 'fragments', label: 'Fragments', icon: Feather },
     { view: 'discover', label: 'Discover', icon: Sparkles },

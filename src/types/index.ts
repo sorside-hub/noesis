@@ -1,5 +1,4 @@
 export type ViewMode =
-  | 'home'
   | 'fragments'
   | 'capture'
   | 'library'

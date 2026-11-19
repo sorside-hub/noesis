@@ -128,7 +128,6 @@ export const ProjectsPage: React.FC = () => {
     activeProjectId,
     openProject,
     closeProject,
-    backTargetLabel,
     projectsTableMissing,
     createProject,
     updateProject,
@@ -883,9 +882,7 @@ export const ProjectsPage: React.FC = () => {
                 >
                   <ArrowLeft size={13} />
                   <span className="hidden sm:inline">
-                    {backTargetLabel === 'Home'
-                      ? 'Home'
-                      : returnTabAfterDetail === 'catalog'
+                    {returnTabAfterDetail === 'catalog'
                       ? 'Katalog Karya'
                       : 'Studio Kerja'}
                   </span>

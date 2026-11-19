@@ -383,7 +383,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   };
 
   // Views & Filter state
-  const [activeView, setActiveViewState] = useState<ViewMode>('home');
+  const [activeView, setActiveViewState] = useState<ViewMode>('library');
   const [activeStreamFilter, setActiveStreamFilter] = useState<StreamFilter>('all');
   const [activeNoteId, setActiveNoteIdState] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -419,14 +419,14 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   // CENTRALIZED PWA NAVIGATION HISTORY & LIFO OVERLAY CONTROLLER
   // =========================================================================
   const TOP_LEVEL_VIEWS = useMemo(
-    () => new Set<ViewMode>(['home', 'library', 'fragments', 'capture', 'discover', 'projects']),
+    () => new Set<ViewMode>(['fragments', 'capture', 'discover', 'projects']),
     []
   );
 
   const initialHistoryEntry: NoesisHistoryEntry = {
     __noesis: true,
     idx: 0,
-    view: 'home',
+    view: 'library',
     noteId: '',
     projectId: null,
     fragmentDrawerOpen: false,
@@ -442,7 +442,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const expectedPopIdxRef = useRef<number | null>(null);
   const pendingNavAfterGoRef = useRef<(() => void) | null>(null);
 
-  const activeViewRef = useRef<ViewMode>('home');
+  const activeViewRef = useRef<ViewMode>('library');
   const activeNoteIdRef = useRef<string>('');
   const activeProjectIdRef = useRef<string | null>(null);
   const flushProjectSaveRef = useRef<(projectId: string) => void>(() => {});
@@ -450,7 +450,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
   const activeFragmentIdRef = useRef<string | null>(null);
   const lastLibraryNoteIdRef = useRef<string | null>(null);
   const lastFragmentIdRef = useRef<string | null>(null);
-  const [backTargetLabel, setBackTargetLabel] = useState<string>('Home');
+  const [backTargetLabel, setBackTargetLabel] = useState<string>('Library');
 
   const computeBackTargetLabel = (stack: NoesisHistoryEntry[], currentIdx: number): string => {
     for (let i = currentIdx - 1; i >= 0; i--) {
@@ -458,8 +458,6 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       if (!entry || entry.overlayId) continue;
       if (entry.fragmentDrawerOpen) return 'Fragment';
       switch (entry.view) {
-        case 'home':
-          return 'Home';
         case 'library':
           return 'Library';
         case 'fragments':
@@ -474,10 +472,10 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         case 'editor':
           return 'Back';
         default:
-          return 'Home';
+          return 'Library';
       }
     }
-    return 'Home';
+    return 'Library';
   };
 
   const applyEntryToReactState = (entry: NoesisHistoryEntry) => {
@@ -2426,8 +2424,9 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       flushProjectSaveRef.current(activeProjectIdRef.current);
     }
 
-    // 1. Navigating to Home -> Always rewind cleanly to root (depth 0)
-    if (view === 'home') {
+    // 1. Navigating to Library (root hub) -> Always rewind cleanly to root (depth 0)
+    if (view === 'library') {
+      lastLibraryNoteIdRef.current = null;
       const totalPops = historyCursorRef.current;
       historyStackRef.current = [initialHistoryEntry];
       historyCursorRef.current = 0;
@@ -2440,13 +2439,11 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return;
     }
 
-    if (view === 'library') {
-      lastLibraryNoteIdRef.current = null;
-    } else if (view === 'editor') {
+    if (view === 'editor') {
       lastLibraryNoteIdRef.current = targetNoteId || null;
     }
 
-    // 2. Top-Level Hub-and-Spoke Views (Opsi B: live at depth 1 above Home)
+    // 2. Top-Level Hub-and-Spoke Views (live at depth 1 above Library)
     if (TOP_LEVEL_VIEWS.has(view)) {
       const targetEntry: NoesisHistoryEntry = {
         __noesis: true,
@@ -2766,8 +2763,8 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
     }
     if (activeViewRef.current === 'editor' && activeNoteIdRef.current) {
       setActiveView('library');
-    } else if (activeViewRef.current !== 'home') {
-      setActiveView('home');
+    } else if (activeViewRef.current !== 'library') {
+      setActiveView('library');
     }
   };
 
@@ -2789,7 +2786,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
         return;
       }
 
-      // Coming from another tab (e.g. Home, Fragments, Discover)
+      // Coming from another tab (e.g. Fragments, Discover, Projects)
       // Check if we remembered an open note in Library
       const rememberedNoteId = lastLibraryNoteIdRef.current;
       if (rememberedNoteId && notesRef.current.some((n) => n.id === rememberedNoteId && !n.archived)) {
@@ -2826,17 +2823,7 @@ export const NoesisProvider: React.FC<{ children: ReactNode }> = ({ children }) 
       return;
     }
 
-    // 3. HOME TAB
-    if (targetTab === 'home') {
-      if (activeViewRef.current === 'home') {
-        scrollToTop('home');
-        return;
-      }
-      setActiveView('home');
-      return;
-    }
-
-    // 4. DISCOVER TAB
+    // 3. DISCOVER TAB
     if (targetTab === 'discover') {
       if (activeViewRef.current === 'discover') {
         scrollToTop(`discover:${discoverTab}`);

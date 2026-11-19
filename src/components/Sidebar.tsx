@@ -3,7 +3,6 @@ import { useNoesis } from '../context/NoesisContext';
 import { PWAInstallButton } from './PWAInstallButton';
 import { ViewMode } from '../types';
 import {
-  Compass,
   Feather,
   BookOpen,
   Sparkles,
@@ -51,7 +50,6 @@ export const Sidebar: React.FC = () => {
   const archiveCount = notes.filter((n) => n.archived).length;
 
   const navItems: { view: ViewMode; label: string; icon: React.ComponentType<{ size?: number; className?: string }> }[] = [
-    { view: 'home', label: 'Overview', icon: Compass },
     { view: 'library', label: 'Library', icon: BookOpen },
     { view: 'fragments', label: 'Fragments', icon: Feather },
     { view: 'discover', label: 'Discover', icon: Sparkles },
@@ -64,7 +62,7 @@ export const Sidebar: React.FC = () => {
       <aside className="w-16 border-r border-[#E8E2D8] dark:border-[#2F2B28] bg-[#F5EFEB] dark:bg-[#1A1817] flex flex-col items-center py-4 justify-between h-full shrink-0 select-none transition-all">
         <div className="flex flex-col items-center gap-4 w-full">
           <button
-            onClick={() => selectTab('home')}
+            onClick={() => selectTab('library')}
             className="w-10 h-10 rounded-xl bg-[#FAF7F2] dark:bg-[#272422] border border-[#E8E2D8] dark:border-[#332F2C] flex items-center justify-center font-serif text-lg font-bold text-[#9A3412] dark:text-[#EA580C]"
             title="Noesis"
           >
@@ -152,7 +150,7 @@ export const Sidebar: React.FC = () => {
         {/* Brand Header */}
         <div className="flex items-center justify-between">
           <div
-            onClick={() => selectTab('home')}
+            onClick={() => selectTab('library')}
             className="cursor-pointer group"
           >
             <h1 className="font-serif text-2xl tracking-tight font-medium text-[#221F1D] dark:text-[#EDE8E1] group-hover:text-[#9A3412] dark:group-hover:text-[#EA580C] transition-colors">
